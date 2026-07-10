@@ -98,8 +98,36 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
     return tasks
 
 
+EVALUATOR_PROMPT = """
+Evaluate if this Python script meets the requirements for a minimal, focused analysis pipeline.
+
+PASS if ALL of the following are true:
+- No matplotlib, visualization, or image saving code
+- Only core functions present (load_images, segment_nuclei, count_nuclei, main)
+- No unused metric collection or over-engineered algorithms
+- Simple Otsu + morphology, not watershed
+- One-line docstrings only
+- Approximately 150-200 lines of code
+- Returns results, doesn't handle I/O (except main)
+
+Script to evaluate:
+{content}
+
+Return your response in this format:
+
+<evaluation>
+PASS or FAIL
+</evaluation>
+
+<feedback>
+If FAIL, list specific issues to fix (be concise).
+If PASS, write "Ready for production."
+</feedback>
+"""
+
+
 def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> str:
-    """Compile individual worker functions into a single executable script."""
+    """Compile worker functions into a single executable script."""
     analysis = orchestrator_results["analysis"]
 
     functions_text = "\n\n".join([
@@ -115,6 +143,104 @@ def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> st
     compiled_response = llm_call(compiler_input, model=model)
     compiled_script = extract_xml(compiled_response, "response")
 
+    return compiled_script
+
+
+def evaluate_script(compiled_script: str, model: str = DEFAULT_MODEL) -> tuple[str, str]:
+    """Evaluate if compiled script meets requirements. Returns (verdict, feedback)."""
+    evaluator_input = EVALUATOR_PROMPT.format(content=compiled_script)
+    evaluator_response = llm_call(evaluator_input, model=model)
+    evaluation = extract_xml(evaluator_response, "evaluation").strip()
+    feedback = extract_xml(evaluator_response, "feedback").strip()
+    return evaluation, feedback
+
+
+def generate_and_optimize(report: str, image_metadata: str, model: str = DEFAULT_MODEL, max_iterations: int = 2) -> str:
+    """Orchestrate → Compile → Evaluate → Redesign loop until script is production-ready."""
+    orchestrator = FlexibleOrchestrator(
+        orchestrator_prompt=ORCHESTRATOR_PROMPT,
+        worker_prompt=WORKER_PROMPT,
+    )
+
+    feedback_context = ""
+
+    for iteration in range(max_iterations):
+        print(f"\n{'='*80}")
+        print(f"ITERATION {iteration + 1}/{max_iterations}")
+        print(f"{'='*80}")
+
+        # Step 1: Orchestrator designs architecture (with feedback if redesigning)
+        if feedback_context:
+            print(f"\nRedesigning based on feedback...")
+            modified_orchestrator_prompt = ORCHESTRATOR_PROMPT + f"\n\nPrevious design feedback to address:\n{feedback_context}"
+            orchestrator_input = orchestrator._format_prompt(
+                modified_orchestrator_prompt,
+                report=report,
+                input_data=image_metadata
+            )
+        else:
+            orchestrator_input = orchestrator._format_prompt(
+                ORCHESTRATOR_PROMPT,
+                report=report,
+                input_data=image_metadata
+            )
+
+        orchestrator_response = llm_call(orchestrator_input, model=model)
+        analysis = extract_xml(orchestrator_response, "analysis")
+        tasks_xml = extract_xml(orchestrator_response, "tasks")
+        tasks = parse_tasks(tasks_xml)
+
+        print(f"\nArchitecture: {len(tasks)} functions")
+
+        # Step 2: Workers implement
+        print("\nGenerating worker implementations...")
+        worker_results = []
+        for i, task_info in enumerate(tasks, 1):
+            func_name = task_info.get("function", f"task_{i}")
+            worker_input = orchestrator._format_prompt(
+                WORKER_PROMPT,
+                original_report=report,
+                function=func_name,
+                description=task_info.get("description", ""),
+                input=task_info.get("input", ""),
+                output=task_info.get("output", ""),
+                input_data=image_metadata,
+            )
+            worker_response = llm_call(worker_input, model=model)
+            worker_content = extract_xml(worker_response, "response")
+            worker_results.append({
+                "function": func_name,
+                "description": task_info.get("description", ""),
+                "result": worker_content,
+            })
+
+        orchestrator_results = {
+            "analysis": analysis,
+            "worker_results": worker_results,
+        }
+
+        # Step 3: Compiler assembles
+        print("Compiling script...")
+        compiled_script = compile_script(orchestrator_results, model=model)
+
+        # Step 4: Evaluate
+        print("Evaluating script...")
+        evaluation, feedback = evaluate_script(compiled_script, model=model)
+
+        print(f"\nEvaluation: {evaluation}")
+        print(f"Feedback: {feedback}")
+
+        if evaluation == "PASS":
+            print(f"\n{'='*80}")
+            print("✓ Script is production-ready!")
+            print(f"{'='*80}\n")
+            return compiled_script
+
+        feedback_context = feedback
+
+    print(f"\n{'='*80}")
+    print("⚠ Max iterations reached. Returning best effort.")
+    print(f"{'='*80}\n")
     return compiled_script
 
 
@@ -322,26 +448,16 @@ Return your response in this format - it MUST include both the opening and closi
 </response>
 """
 
-orchestrator = FlexibleOrchestrator(
-    orchestrator_prompt=ORCHESTRATOR_PROMPT,
-    worker_prompt=WORKER_PROMPT,
-)
-
 with open('./inputs/report/report_20260706_182925.md', 'r') as f:
     report_content = f.read()
 
 image_metadata = extract_image_metadata('./inputs/images')
 
-results = orchestrator.process(
+final_script = generate_and_optimize(
     report=report_content,
-    input_data=image_metadata
+    image_metadata=image_metadata,
+    max_iterations=2
 )
-
-print("\n" + "=" * 80)
-print("COMPILING FINAL SCRIPT")
-print("=" * 80 + "\n")
-
-final_script = compile_script(results)
 
 output_dir = Path('./outputs')
 output_dir.mkdir(exist_ok=True)
