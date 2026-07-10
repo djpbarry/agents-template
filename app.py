@@ -147,6 +147,16 @@ def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> st
     compiled_response = llm_call(compiler_input, model=model)
     compiled_script = extract_xml(compiled_response, "response")
 
+    # Strip markdown code block markers if present
+    compiled_script = compiled_script.strip()
+    if compiled_script.startswith("```"):
+        lines = compiled_script.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        compiled_script = "\n".join(lines).strip()
+
     return compiled_script
 
 
@@ -452,7 +462,7 @@ Return your response in this format - it MUST include both the opening and closi
 </response>
 """
 
-with open('./inputs/report/report_20260706_182925.md', 'r') as f:
+with open('./inputs/report/report_20260710_202254.md', 'r') as f:
     report_content = f.read()
 
 image_metadata = extract_image_metadata('./inputs/images')
@@ -476,4 +486,3 @@ print("\n" + "=" * 80)
 print("FINAL COMPILED SCRIPT")
 print("=" * 80)
 print(f"\nScript saved to: {output_file}\n")
-print(final_script)
