@@ -1,0 +1,19 @@
+[workspace]
+authors = ["Dave Barry <david.barry@crick.ac.uk>"]
+channels = ["conda-forge"]
+name = "bia_team"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.14.6,<3.15"
+pixi-pycharm = ">=0.0.11,<0.0.12"
+
+[environments]
+biateam = ["default"]
+
+[pypi-dependencies]
+anthropic = ">=0.116.0, <0.117"
+python-dotenv = ">=1.2.2, <2"
