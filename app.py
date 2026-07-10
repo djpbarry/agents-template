@@ -109,15 +109,20 @@ Original Task Report:
 Script to evaluate:
 {content}
 
+Execution Result:
+{execution_result}
+
 PASS if ALL of the following are true:
-1. TASK ALIGNMENT: Script actually addresses the requirements from the report
-2. CLEAN ARCHITECTURE: Only core functions present, no unnecessary utilities
-3. MINIMAL: No matplotlib, visualization, or image saving code
-4. NO OVER-ENGINEERING: Simple algorithms appropriate to task complexity (per report)
-5. FOCUSED: No unused metric collection or redundant logic
-6. DOCUMENTED: One-line docstrings only
-7. SIZED: Number of lines of code is minimal
-8. BEHAVIOR: Returns results, doesn't handle I/O (except main)
+1. EXECUTION: Script ran successfully without errors (if Docker was available)
+2. TASK ALIGNMENT: Script actually addresses the requirements from the report
+3. OUTPUT VALIDITY: Execution produced expected output
+4. CLEAN ARCHITECTURE: Only core functions present, no unnecessary utilities
+5. MINIMAL: No matplotlib, visualization, or image saving code
+6. NO OVER-ENGINEERING: Simple algorithms appropriate to task complexity (per report)
+7. FOCUSED: No unused metric collection or redundant logic
+8. DOCUMENTED: One-line docstrings only
+9. SIZED: Number of lines of code is minimal
+10. BEHAVIOR: Returns results, doesn't handle I/O (except main)
 
 Return your response in this format:
 
@@ -126,7 +131,7 @@ PASS or FAIL
 </evaluation>
 
 <feedback>
-If FAIL, list specific issues to fix (prioritize task alignment first, then code quality).
+If FAIL, list specific issues to fix (prioritize execution/output validity first, then task alignment, then code quality).
 If PASS, write "Ready for production."
 </feedback>
 """
@@ -162,7 +167,7 @@ def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> st
     return compiled_script
 
 
-def execute_script_in_docker(script: str, image_dir: str, timeout: int = 60) -> tuple[bool, str]:
+def execute_script_in_docker(script: str, image_dir: str, timeout: int = 300) -> tuple[bool, str]:
     """
     Execute script in Docker container to verify it works.
     Returns (success, output_or_error) or (None, message) if Docker unavailable.
@@ -215,34 +220,36 @@ def evaluate_script(compiled_script: str, report: str, image_dir: str = None, mo
 
     # First, try to execute the script if image_dir is provided
     execution_status = None
-    execution_feedback = ""
+    execution_result = "(Docker unavailable - execution not tested)"
 
     if image_dir:
         exec_success, exec_output = execute_script_in_docker(compiled_script, image_dir)
 
         if exec_success is None:
             # Docker unavailable - note it but don't fail
-            execution_feedback = f"\n(Docker unavailable: {exec_output})"
+            execution_result = f"Docker unavailable: {exec_output}"
         elif exec_success:
-            execution_feedback = f"\n✓ Execution verified: Script ran successfully"
+            execution_result = f"✓ Script executed successfully\n\nOutput:\n{exec_output[:500]}"
         else:
             # Execution failed - this is a real problem
-            execution_feedback = f"\n✗ Execution failed: {exec_output[:300]}"
+            execution_result = f"✗ Script execution failed\n\nError:\n{exec_output[:500]}"
             execution_status = "FAIL"
 
-    # Then evaluate code quality and task alignment
-    evaluator_input = EVALUATOR_PROMPT.format(report=report, content=compiled_script)
-    if execution_feedback:
-        evaluator_input += f"\n\nExecution Test Result:{execution_feedback}"
+    # Then evaluate code quality and task alignment with execution results
+    evaluator_input = EVALUATOR_PROMPT.format(
+        report=report,
+        content=compiled_script,
+        execution_result=execution_result
+    )
 
     evaluator_response = llm_call(evaluator_input, model=model)
     evaluation = extract_xml(evaluator_response, "evaluation").strip()
     feedback = extract_xml(evaluator_response, "feedback").strip()
 
-    # If execution actually failed (not just unavailable), override evaluation to FAIL
+    # If execution actually failed (not just unavailable), prioritize that in feedback
     if execution_status == "FAIL":
         evaluation = "FAIL"
-        feedback = f"Script execution failed: {execution_feedback}\n\n{feedback}"
+        feedback = f"Script execution failed. Error: {execution_result}\n\n{feedback}"
 
     return evaluation, feedback
 
