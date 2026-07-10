@@ -268,12 +268,12 @@ For loading TIFF images, use: from bioio import BioImage; img = BioImage(filepat
 
 Write clean, minimal code with clear docstrings. Output a complete, importable function with all necessary imports.
 
-Return your response in this format:
+Return your response in this format - it MUST include both the opening and closing xml tags:
 
 <response>
-```python
-# Your complete function implementation here
-```
+
+# Your complete, executable Python script here
+
 </response>
 """
 
