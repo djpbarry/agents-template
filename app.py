@@ -282,7 +282,7 @@ Return your response in this format - it MUST include both the opening and closi
 """
 
 COMPILER_PROMPT = """
-You are an expert Python developer. Integrate these functions into a single, executable Python script.
+You are an expert Python developer. Integrate these functions into a single, minimal, executable Python script.
 
 Architecture Analysis:
 {analysis}
@@ -290,11 +290,20 @@ Architecture Analysis:
 Functions to integrate:
 {functions}
 
-Create a complete Python script that:
-1. Imports all necessary libraries
-2. Includes all the functions above
-3. Includes a main() function that orchestrates the function calls based on the architecture
+CRITICAL OPTIMIZATION RULES:
+1. DEDUPLICATE: Identify overlapping functions and consolidate into single, well-named functions
+2. SIMPLIFY DOCSTRINGS: Keep only essential info - one-line summary + Args/Returns (no Raises, Notes, Examples)
+3. REMOVE REDUNDANCY: Consolidate repeated logic patterns, parameter checking, and comments
+4. MINIMIZE: Remove verbose comments and over-engineered error handling for this straightforward task
+5. FOCUS: Keep only code essential to the core workflow
+
+Create a complete, minimal Python script that:
+1. Imports only necessary libraries
+2. Defines consolidated, non-redundant functions (remove duplicates)
+3. Includes a main() function that orchestrates the workflow
 4. Includes code to execute main() at the bottom
+
+Aim for a minimal amount of clean, production-quality code - remove anything that is not essential to the core workflow.
 
 Return your response in this format - it MUST include both the opening and closing xml tags:
 
