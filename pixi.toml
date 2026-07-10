@@ -17,3 +17,5 @@ biateam = ["default"]
 [pypi-dependencies]
 anthropic = ">=0.116.0, <0.117"
 python-dotenv = ">=1.2.2, <2"
+bioio = ">=3.4.0, <4"
+bioio-tifffile = ">=1.3.0, <2"

@@ -2,8 +2,10 @@
 
 import os
 import re
+from pathlib import Path
 
 from anthropic import Anthropic
+from bioio import BioImage
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -48,6 +50,33 @@ def extract_xml(text: str, tag: str) -> str:
     """
     match = re.search(f"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
     return match.group(1) if match else ""
+
+
+def extract_image_metadata(directory: str) -> str:
+    """Extract metadata from multi-channel TIFF images using bioio."""
+    metadata_list = []
+
+    for file_path in sorted(Path(directory).glob('*.tif*')):
+        try:
+            img = BioImage(str(file_path))
+            metadata = {
+                "filename": file_path.name,
+                "shape": dict(zip(['T', 'Z', 'C', 'Y', 'X'], img.shape)),
+                "dtype": str(img.dtype),
+                "ndim": len(img.shape),
+            }
+
+            if hasattr(img, 'channel_names') and img.channel_names:
+                metadata["channel_names"] = list(img.channel_names)
+
+            metadata_list.append(metadata)
+        except Exception as e:
+            metadata_list.append({
+                "filename": file_path.name,
+                "error": str(e)
+            })
+
+    return str(metadata_list)
 
 
 def parse_tasks(tasks_xml: str) -> list[dict]:
@@ -96,7 +125,7 @@ class FlexibleOrchestrator:
         except KeyError as e:
             raise ValueError(f"Missing required prompt variable: {e}") from e
 
-    def process(self, report: str, input_data: str ) -> dict:
+    def process(self, report: str, input_data: str) -> dict:
         """Process task by breaking it down and running subtasks in parallel."""
 
         # Step 1: Get orchestrator response
@@ -134,6 +163,7 @@ class FlexibleOrchestrator:
                 original_report=report,
                 task_type=task_info["type"],
                 task_description=task_info["description"],
+                input_data=input_data,
             )
 
             worker_response = llm_call(worker_input, model=self.model)
@@ -202,11 +232,15 @@ Generate a python function based on:
 Report: {original_report}
 Sub-Task: {task_type}
 Guidelines: {task_description}
+Image Metadata: {input_data}
 
-Keep the number of lines of code used to absolute minimum and clearly document everything. Return your response in this format:
+Keep the number of lines of code used to absolute minimum and clearly document everything. Your output should consist
+of a python script containing a single function and nothing more.
+
+Return your response in this format:
 
 <response>
-Your content here, maintaining the specified style and fully addressing requirements.
+Your content here fully addressing requirements.
 </response>
 """
 
@@ -218,7 +252,9 @@ orchestrator = FlexibleOrchestrator(
 with open('./inputs/report/report_20260706_182925.md', 'r') as f:
     report_content = f.read()
 
+image_metadata = extract_image_metadata('./inputs/images')
+
 results = orchestrator.process(
     report=report_content,
-    input_data='./inputs/images'
+    input_data=image_metadata
 )
