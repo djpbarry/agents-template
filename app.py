@@ -2,6 +2,7 @@
 
 import os
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from anthropic import Anthropic
@@ -61,7 +62,7 @@ def extract_image_metadata(directory: str) -> str:
             img = BioImage(str(file_path))
             metadata = {
                 "filename": file_path.name,
-                "shape": dict(zip(['T', 'Z', 'C', 'Y', 'X'], img.shape)),
+                "shape": dict(zip(img.dims.order, img.shape)),
                 "dtype": str(img.dtype),
                 "ndim": len(img.shape),
             }
@@ -82,25 +83,17 @@ def extract_image_metadata(directory: str) -> str:
 def parse_tasks(tasks_xml: str) -> list[dict]:
     """Parse XML tasks into a list of task dictionaries."""
     tasks = []
-    current_task = {}
-
-    for line in tasks_xml.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        if line.startswith("<task>"):
-            current_task = {}
-        elif line.startswith("<type>"):
-            current_task["type"] = line[6:-7].strip()
-        elif line.startswith("<description>"):
-            current_task["description"] = line[12:-13].strip()
-        elif line.startswith("</task>"):
-            if "description" in current_task:
-                if "type" not in current_task:
-                    current_task["type"] = "default"
-                tasks.append(current_task)
-
+    try:
+        root = ET.fromstring(f"<root>{tasks_xml}</root>")
+        for task_elem in root.findall("task"):
+            task = {}
+            for child in task_elem:
+                if child.text:
+                    task[child.tag] = child.text.strip()
+            if task:
+                tasks.append(task)
+    except ET.ParseError:
+        pass
     return tasks
 
 
@@ -146,8 +139,10 @@ class FlexibleOrchestrator:
         print(f"IDENTIFIED {len(tasks)} SUB-TASKS")
         print("=" * 80)
         for i, task_info in enumerate(tasks, 1):
-            print(f"\n{i}. {task_info['type'].upper()}")
+            print(f"\n{i}. {task_info['function']}")
             print(f"   {task_info['description']}")
+            print(f"   {task_info['input']}")
+            print(f"   {task_info['output']}")
 
         print("\n" + "=" * 80)
         print("GENERATING CONTENT")
@@ -217,12 +212,16 @@ Outline clearly how each sub-task contributes to the overall goal.
 
 <tasks>
     <task>
-    <type>main</type>
-    <description>Outline the main approach to analysing the input data using python</description>
+    <function>main</function>
+    <description>The main function for analysing the input data using python</description>
+    <input>The input parameters required by the main function, if any</input>
+    <output>The output returned by the main function, if any</output>
     </task>
     <task>
-    <type>load_images</type>
-    <description>Outline the approach to loading images.</description>
+    <function>load_images</function>
+    <description>A function for loading TIF images</description>
+    <input>The input parameters required by the load_images function, if any</input>
+    <output>The output returned by the load_images function, if any</output>
     </task>
 </tasks>
 """
