@@ -99,19 +99,23 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
 
 
 EVALUATOR_PROMPT = """
-Evaluate if this Python script meets the requirements for a minimal, focused analysis pipeline.
+Evaluate if this Python script meets the task requirements and quality standards.
 
-PASS if ALL of the following are true:
-- No matplotlib, visualization, or image saving code
-- Only core functions present (load_images, segment_nuclei, count_nuclei, main)
-- No unused metric collection or over-engineered algorithms
-- Simple Otsu + morphology, not watershed
-- One-line docstrings only
-- Approximately 150-200 lines of code
-- Returns results, doesn't handle I/O (except main)
+Original Task Report:
+{report}
 
 Script to evaluate:
 {content}
+
+PASS if ALL of the following are true:
+1. TASK ALIGNMENT: Script actually addresses the requirements from the report
+2. CLEAN ARCHITECTURE: Only core functions present, no unnecessary utilities
+3. MINIMAL: No matplotlib, visualization, or image saving code
+4. NO OVER-ENGINEERING: Simple algorithms appropriate to task complexity (per report)
+5. FOCUSED: No unused metric collection or redundant logic
+6. DOCUMENTED: One-line docstrings only
+7. SIZED: Number of lines of code is minimal
+8. BEHAVIOR: Returns results, doesn't handle I/O (except main)
 
 Return your response in this format:
 
@@ -120,7 +124,7 @@ PASS or FAIL
 </evaluation>
 
 <feedback>
-If FAIL, list specific issues to fix (be concise).
+If FAIL, list specific issues to fix (prioritize task alignment first, then code quality).
 If PASS, write "Ready for production."
 </feedback>
 """
@@ -146,9 +150,9 @@ def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> st
     return compiled_script
 
 
-def evaluate_script(compiled_script: str, model: str = DEFAULT_MODEL) -> tuple[str, str]:
-    """Evaluate if compiled script meets requirements. Returns (verdict, feedback)."""
-    evaluator_input = EVALUATOR_PROMPT.format(content=compiled_script)
+def evaluate_script(compiled_script: str, report: str, model: str = DEFAULT_MODEL) -> tuple[str, str]:
+    """Evaluate if compiled script meets task requirements and quality standards. Returns (verdict, feedback)."""
+    evaluator_input = EVALUATOR_PROMPT.format(report=report, content=compiled_script)
     evaluator_response = llm_call(evaluator_input, model=model)
     evaluation = extract_xml(evaluator_response, "evaluation").strip()
     feedback = extract_xml(evaluator_response, "feedback").strip()
@@ -225,7 +229,7 @@ def generate_and_optimize(report: str, image_metadata: str, model: str = DEFAULT
 
         # Step 4: Evaluate
         print("Evaluating script...")
-        evaluation, feedback = evaluate_script(compiled_script, model=model)
+        evaluation, feedback = evaluate_script(compiled_script, report=report, model=model)
 
         print(f"\nEvaluation: {evaluation}")
         print(f"Feedback: {feedback}")
