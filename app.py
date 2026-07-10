@@ -296,12 +296,12 @@ Create a complete Python script that:
 3. Includes a main() function that orchestrates the function calls based on the architecture
 4. Includes code to execute main() at the bottom
 
-Return your response in this format:
+Return your response in this format - it MUST include both the opening and closing xml tags:
 
 <response>
-```python
+
 # Your complete, executable Python script here
-```
+
 </response>
 """
 
