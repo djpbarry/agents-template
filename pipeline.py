@@ -251,8 +251,10 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
     """Parse XML tasks into a list of task dictionaries."""
     tasks = []
     try:
-        root = ET.fromstring(f"<root>{xml_escape(tasks_xml)}</root>")
-        for task_elem in root.findall("task"):
+        root = ET.fromstring(f"<root>{tasks_xml}</root>")
+        task_elems = root.findall("task")
+
+        for task_elem in task_elems:
             task = {}
             for child in task_elem:
                 if child.text:
