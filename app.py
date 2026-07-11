@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+# Role-specific models - adjust based on task complexity
+ORCHESTRATOR_MODEL = "claude-opus-4-8"  # Complex reasoning for architecture design
+WORKER_MODEL = "claude-haiku-4-5"  # Straightforward implementation
+COMPILER_MODEL = "claude-sonnet-5"  # Moderate complexity for code integration
+EVALUATOR_MODEL = "claude-sonnet-5"  # Moderate complexity for verification
+
 DEFAULT_MODEL = "claude-haiku-4-5"
 
 
@@ -205,7 +212,7 @@ def compile_script(orchestrator_results: dict, model: str = DEFAULT_MODEL) -> st
         functions=functions_text,
     )
 
-    compiled_response = llm_call(compiler_input, system_prompt=COMPILER_SYSTEM, model=model, cache_prompt=True)
+    compiled_response = llm_call(compiler_input, system_prompt=COMPILER_SYSTEM, model=COMPILER_MODEL, cache_prompt=True)
     compiled_script = extract_xml(compiled_response, "response")
 
     # Strip markdown code block markers if present
@@ -296,7 +303,7 @@ def evaluate_script(compiled_script: str, report: str, image_dir: str = None, mo
         execution_result=execution_result
     )
 
-    evaluator_response = llm_call(evaluator_input, system_prompt=EVALUATOR_SYSTEM, model=model, cache_prompt=True)
+    evaluator_response = llm_call(evaluator_input, system_prompt=EVALUATOR_SYSTEM, model=EVALUATOR_MODEL, cache_prompt=True)
     evaluation = extract_xml(evaluator_response, "evaluation").strip()
     feedback = extract_xml(evaluator_response, "feedback").strip()
 
@@ -338,7 +345,7 @@ def generate_and_optimize(report: str, image_metadata: str, image_dir: str = Non
                 input_data=image_metadata
             )
 
-        orchestrator_response = llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM, model=model, cache_prompt=True)
+        orchestrator_response = llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM, model=ORCHESTRATOR_MODEL, cache_prompt=True)
         analysis = extract_xml(orchestrator_response, "analysis")
         tasks_xml = extract_xml(orchestrator_response, "tasks")
         tasks = parse_tasks(tasks_xml)
@@ -359,7 +366,7 @@ def generate_and_optimize(report: str, image_metadata: str, image_dir: str = Non
                 output=task_info.get("output", ""),
                 input_data=image_metadata,
             )
-            worker_response = llm_call(worker_input, system_prompt=WORKER_SYSTEM, model=model, cache_prompt=True)
+            worker_response = llm_call(worker_input, system_prompt=WORKER_SYSTEM, model=WORKER_MODEL, cache_prompt=True)
             worker_content = extract_xml(worker_response, "response")
             worker_results.append({
                 "function": func_name,
@@ -423,7 +430,7 @@ class FlexibleOrchestrator:
 
         # Step 1: Get orchestrator response
         orchestrator_input = self._format_prompt(self.orchestrator_prompt, report=report, input_data=input_data)
-        orchestrator_response = llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM, model=self.model)
+        orchestrator_response = llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM, model=ORCHESTRATOR_MODEL)
 
         # Parse orchestrator response
         analysis = extract_xml(orchestrator_response, "analysis")
@@ -464,7 +471,7 @@ class FlexibleOrchestrator:
                 input_data=input_data,
             )
 
-            worker_response = llm_call(worker_input, system_prompt=WORKER_SYSTEM, model=self.model)
+            worker_response = llm_call(worker_input, system_prompt=WORKER_SYSTEM, model=WORKER_MODEL)
             worker_content = extract_xml(worker_response, "response")
 
             # Validate worker response - handle empty outputs
