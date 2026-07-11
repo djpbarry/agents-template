@@ -1,6 +1,6 @@
 version: 6
 environments:
-  biateam:
+  agents:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
