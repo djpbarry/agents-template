@@ -108,11 +108,13 @@ def llm_call(prompt: str, system_prompt: str = None, model=DEFAULT_MODEL, cache_
     response = client.messages.create(
         model=model,
         max_tokens=4096,
-        system=system_content if isinstance(system_content, str) else None,
+        system=system_content,
         messages=messages,
-        temperature=0.1,
     )
-    return response.content[0].text
+    for block in response.content:
+        if hasattr(block, 'text'):
+            return block.text
+    raise ValueError("No text content in response")
 
 
 def extract_xml(text: str, tag: str) -> str:
@@ -344,17 +346,15 @@ def generate_and_optimize(report: str, image_metadata: str, image_dir: str = Non
         # Step 1: Orchestrator designs architecture (with feedback if redesigning)
         if feedback_context:
             print(f"\nRedesigning based on feedback...")
-            modified_orchestrator_prompt = ORCHESTRATOR_PROMPT + f"\n\nPrevious design feedback to address:\n{feedback_context}"
-            orchestrator_input = orchestrator._format_prompt(
-                modified_orchestrator_prompt,
-                report=report,
-                input_data=image_metadata
-            )
+            feedback_section = f"Previous design feedback to address:\n{feedback_context}"
         else:
-            orchestrator_input = orchestrator._format_prompt(
-                ORCHESTRATOR_PROMPT,
-                report=report,
-                input_data=image_metadata
+            feedback_section = ""
+
+        orchestrator_input = orchestrator._format_prompt(
+            ORCHESTRATOR_PROMPT,
+            report=report,
+            input_data=image_metadata,
+            feedback=feedback_section
             )
 
         orchestrator_response = llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM, model=ORCHESTRATOR_MODEL, cache_prompt=True)
@@ -522,8 +522,10 @@ Report: {report}
 
 Image Data (bioio metadata): {input_data}
 
+{feedback}
+
 Do not write any code, only design an approach. Break it into distinct, self-contained, modular sub-tasks.
-Each sub-task should specify a function that a colleague will implement. Keep the number of sub-tasks minimal to stay 
+Each sub-task should specify a function that a colleague will implement. Keep the number of sub-tasks minimal to stay
 within resource constraints.
 
 Design ONLY the essential functions needed. Do NOT design:
@@ -631,7 +633,7 @@ final_script = generate_and_optimize(
     report=report_content,
     image_metadata=image_metadata,
     image_dir=image_dir,
-    max_iterations=2
+    max_iterations=5
 )
 
 output_dir = Path('./outputs')
