@@ -1,7 +1,7 @@
 [workspace]
 authors = ["Dave Barry <david.barry@crick.ac.uk>"]
 channels = ["conda-forge"]
-name = "bia_team"
+name = "agents"
 platforms = ["win-64"]
 version = "0.1.0"
 
@@ -19,3 +19,8 @@ anthropic = ">=0.116.0, <0.117"
 python-dotenv = ">=1.2.2, <2"
 bioio = ">=3.4.0, <4"
 bioio-tifffile = ">=1.3.0, <2"
+numpy = ">=2.5.1, <3"
+scipy = ">=1.18.0, <2"
+scikit-image = ">=0.26.0, <0.27"
+scikit-learn = ">=1.9.0, <2"
+pandas = ">=3.0.3, <4"
