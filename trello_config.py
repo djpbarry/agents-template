@@ -13,7 +13,7 @@ Available libraries for imports:
 - Matplotlib: for plotting and visualization
 """
 
-DOMAIN_NOTES = """Process Trello board JSON exports. Access board structure via cards, lists, members, and metadata fields. Cards contain fields like idMembers, labels, due dates, and custom field values. Use pandas for data aggregation and analysis."""
+DOMAIN_NOTES = """Process Trello board JSON exports. Access board structure via cards, lists, members, and metadata fields. Cards contain fields like idMembers, labels, due dates, and custom field values. Use pandas for data aggregation and analysis. The Trello JSON file is located in the /data directory (or use the INPUT_FOLDER environment variable)."""
 
 
 def extract_input_metadata(directory: str) -> str:
