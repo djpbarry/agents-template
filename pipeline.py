@@ -110,12 +110,13 @@ Input Data: {input_data}
 
 CRITICAL CONSTRAINTS:
 - Implement ONLY the specified function named '{function}' - no additional functions or helpers
-- NO visualization, plotting, data saving, or output files (return data only, let caller handle I/O)
+- If the function is main(), it may include visualization, plotting, and file I/O if required by the task. Otherwise, avoid I/O and let caller handle it.
 - NO metric collection that isn't used in the function output
 - Reuse other architecture functions when needed
 - For main(), call other designed functions rather than reimplementing them
 - Keep algorithm choices simple and justified by the report
 - ONLY use pre-installed libraries listed above and standard library
+- If you use non-ASCII characters (like bullet points • in strings), add "# -*- coding: utf-8 -*-" at the top of your response
 
 Write minimal code with one-line docstrings. Output a single function with necessary imports only.
 
@@ -140,11 +141,12 @@ Functions to integrate:
 {library_notes}
 
 CRITICAL OPTIMIZATION RULES - APPLY STRICTLY:
-1. STRIP VISUALIZATION: Remove ALL visualization, plotting, data saving code, and utility functions for I/O
+1. PRESERVE OUTPUT CODE: Keep visualization, plotting, and data saving code if the task requires it (check the report). Only strip if they're unused or contradict the task.
 2. STRIP UNUSED CODE: Remove functions that don't appear in the architecture
 3. DEDUPLICATE: Merge overlapping functions
-4. DOCSTRINGS: One-line summary + Args/Returns only (no Raises, Notes, Examples, lengthy descriptions)
+4. DOCSTRINGS: One-line summary only, no Args/Returns/Raises/Notes/Examples
 5. NO OVER-ENGINEERING: Minimal error handling, no redundant re-labeling, no unused parameter handling
+6. ENCODING: If the script contains non-ASCII characters in strings, add "# -*- coding: utf-8 -*-" at the very top of the file
 
 Create a complete, minimal Python script:
 1. Imports only necessary libraries (only those listed above and standard library)
@@ -453,18 +455,20 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         evaluation, feedback = await evaluate_script(compiled_script, report=report, config=config, data_dir=data_dir)
 
         print(f"\nEvaluation: {evaluation}")
-        print(f"Feedback: {feedback}")
+        # Replace Unicode characters in feedback for compatibility with Windows console
+        feedback_safe = feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
+        print(f"Feedback: {feedback_safe}")
 
         if evaluation == "PASS":
             print(f"\n{'='*80}")
-            print("✓ Script is production-ready!")
+            print("[OK] Script is production-ready!")
             print(f"{'='*80}\n")
             return compiled_script
 
         feedback_context = feedback
 
     print(f"\n{'='*80}")
-    print("⚠ Max iterations reached. Returning best effort.")
+    print("[WARNING] Max iterations reached. Returning best effort.")
     print(f"{'='*80}\n")
     return compiled_script
 
@@ -543,7 +547,7 @@ class FlexibleOrchestrator:
             worker_content = extract_xml(worker_response, "response")
 
             if not worker_content or not worker_content.strip():
-                print(f"⚠️  Warning: Worker '{func_name}' returned no content")
+                print(f"[WARNING] Worker '{func_name}' returned no content")
                 worker_content = f"[Error: Worker '{func_name}' failed to generate content]"
 
             return {
