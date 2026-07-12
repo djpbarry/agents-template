@@ -180,12 +180,12 @@ PASS if ALL of the following are true:
 2. TASK ALIGNMENT: Script actually addresses the requirements from the report
 3. OUTPUT VALIDITY: Execution produced expected output
 4. CLEAN ARCHITECTURE: Only core functions present, no unnecessary utilities
-5. MINIMAL: No visualization or data saving code
+5. APPROPRIATE TOOLS: Uses visualization/I/O code only if required by the task (no unnecessary extras, but don't omit if the task requires it)
 6. NO OVER-ENGINEERING: Simple algorithms appropriate to task complexity (per report)
 7. FOCUSED: No unused metric collection or redundant logic
 8. DOCUMENTED: One-line docstrings only
-9. SIZED: Number of lines of code is minimal
-10. BEHAVIOR: Returns results, doesn't handle I/O (except main)
+9. SIZED: Number of lines of code is minimal and appropriate for the task scope
+10. BEHAVIOR: Returns/prints results appropriately for the task context (I/O may be required if the task asks for visualizations or reports)
 
 Return your response in this format:
 
