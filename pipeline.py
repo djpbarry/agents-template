@@ -51,41 +51,58 @@ EVALUATOR_SYSTEM = """You are an expert code reviewer and validator. Your role i
 
 # Message prompts for LLM invocations (generic templates with placeholders for domain-specific content)
 ORCHESTRATOR_PROMPT = """
-You are an experienced senior software engineer and architect. Design a MINIMAL approach for this task.
+You are an experienced senior software engineer and architect. Examine the input data structure and design a MINIMAL approach for this task.
 
 Report: {report}
 
-Input Data: {input_data}
+Input Data Available:
+{input_data}
 
 {feedback}
 
-Do not write any code, only design an approach. Break it into distinct, self-contained, modular sub-tasks.
-Each sub-task should specify a function that a colleague will implement. Keep the number of sub-tasks minimal to stay
-within resource constraints.
+STEP 1: ANALYZE THE DATA
+First, carefully examine the input_data metadata above to understand what fields and structures are available.
+Identify 5-7 meaningful statistics that can be computed from the available data. Examples:
+- Counts (total items, items per category/member/status)
+- Aggregations (average, sums, distributions)
+- Time-based metrics (if timestamps exist: time between events, duration in state)
+- Cross-tabulations (breakdowns by multiple dimensions)
+
+STEP 2: PLAN VISUALIZATIONS
+For the statistics you identified, plan 3 visualizations that would illuminate the analysis. Examples:
+- Bar charts for categorical distributions
+- Pie charts for composition
+- Time series for trends
+- Heatmaps for cross-tabulations
+
+STEP 3: DESIGN THE ARCHITECTURE
+Break the task into distinct, self-contained, modular sub-tasks. Each sub-task should specify a function that a colleague will implement.
+Keep the number of sub-tasks minimal to stay within resource constraints.
 
 Design ONLY the essential functions needed. Do NOT design:
-- Visualization or plotting functions
+- Visualization or plotting functions (main() will handle these)
 - Preprocessing functions separate from core logic
 - Metric collection that isn't used in the final output
-- Data saving/export functions (the main function returns data)
 
 Return your response in this format:
 
 <analysis>
-Explain your understanding of the report and the rationale behind your approach.
-Outline clearly how each sub-task contributes to the overall goal.
+1. Describe the data structure and available fields
+2. List the 5-7 statistics you suggest computing (with brief rationale for each)
+3. List the 3+ visualizations you plan to create and what they show
+4. Explain your architectural approach and how each sub-task contributes to the overall goal
 </analysis>
 
 <tasks>
     <task>
     <function>main</function>
-    <description>The main function for analysing the input data using python</description>
+    <description>The main function for analysing the input data: load it, compute suggested statistics, generate visualizations, and print results</description>
     <input>The input parameters required by the main function, if any</input>
     <output>The output returned by the main function, if any</output>
     </task>
     <task>
     <function>load_data</function>
-    <description>A function for loading input data</description>
+    <description>A function for loading and parsing the input data</description>
     <input>The input parameters required by the load_data function, if any</input>
     <output>The output returned by the load_data function, if any</output>
     </task>
@@ -180,7 +197,7 @@ Execution Result:
 PASS if ALL of the following are true:
 1. EXECUTION: Script ran successfully without errors (if Docker was available)
 2. TASK ALIGNMENT: Script actually addresses the requirements from the report
-3. OUTPUT VALIDITY: Execution produced expected output
+3. OUTPUT VALIDITY: Execution produced expected output (statistics printed, visualizations created)
 4. CLEAN ARCHITECTURE: Only core functions present, no unnecessary utilities
 5. APPROPRIATE TOOLS: Uses visualization/I/O code only if required by the task (no unnecessary extras, but don't omit if the task requires it)
 6. NO OVER-ENGINEERING: Simple algorithms appropriate to task complexity (per report)
@@ -188,6 +205,9 @@ PASS if ALL of the following are true:
 8. DOCUMENTED: One-line docstrings only
 9. SIZED: Number of lines of code is minimal and appropriate for the task scope
 10. BEHAVIOR: Returns/prints results appropriately for the task context (I/O may be required if the task asks for visualizations or reports)
+
+IF PASS, ALSO IDENTIFY DATA GAPS:
+After validating the script passes all criteria, examine what fields or data points were NOT available in the input data but could improve future analysis. Suggest 2-3 specific data gaps with brief explanations of why they would be useful (e.g., "priority levels", "time-to-completion", "effort estimates", "dependencies between tasks", etc.).
 
 Return your response in this format:
 
@@ -197,7 +217,7 @@ PASS or FAIL
 
 <feedback>
 If FAIL, list specific issues to fix (prioritize execution/output validity first, then task alignment, then code quality).
-If PASS, write "Ready for production."
+If PASS, write "Ready for production. Data gaps: [list 2-3 suggestions with brief rationale]"
 </feedback>
 """
 
