@@ -2,7 +2,7 @@
 
 ## Objective
 
-Analyze a Trello board JSON export to explore and answer key questions about team workflow, workload distribution, and process health. Generate statistics and visualizations that provide insight into how work flows through the board and where improvements could be made.
+Analyze a Trello board JSON export to explore and answer key questions about team workflow, workload distribution, and process health. Generate metrics and visualizations that provide insight into how work flows through the board and where improvements could be made.
 
 ## Input
 
@@ -22,20 +22,21 @@ Your analysis should help answer these exploratory questions:
 
 ## Analysis Requirements
 
-### 1. Suggest Key Statistics
-Analyse the Trello board JSON export and suggest **5-7 key statistics** that help answer the guiding questions above. Choose metrics that are:
+### 1. Suggest Key metrics
+Analyse the Trello board JSON export and suggest **5-7 key metrics** that help answer the guiding questions above. Choose metrics that are:
 - Computable from the available data
 - Relevant to at least one of the 4 guiding questions
 - More insightful than just raw counts (consider timing, distribution, and patterns)
 
 Examples might include: cards per member, time-to-archive, time-in-list, update frequency, bottleneck lists, velocity trends, etc.
+Consider other metrics that might typically be included in an analysis of Trello board activity, or project management in general.
 
 ### 2. Create Visualizations (3+ PNG files)
-Create **at least 3 visualizations** that illustrate the statistics chosen in section 1. Pick visualizations that help answer the guiding questions:
-- Bar charts for distributions (workload per member, cards per list)
+Create **at least 3 visualizations** that illustrate the metrics chosen in section 1. Pick visualizations that help answer the guiding questions:
 - Time-series or trend plots if timing data is available
 - Heatmaps to show patterns across dimensions
-- Pie charts for composition breakdowns
+- scatter plots to show data distribution and variability
+- Avoid bar charts and pie charts
 
 ### 3. Identify Data Gaps
 
@@ -48,8 +49,8 @@ After analysis, print **2-3 specific suggestions** for additional data/fields th
 
 The script must:
 - Load and parse the Trello JSON export (auto-detect filename in the data directory)
-- Compute statistics suggested in section 1
-- Print statistics to console in a readable tabular format
+- Compute metrics suggested in section 1
+- Print metrics to console in a readable tabular format
 - Generate the visualizations suggested in section 2
 - Print data gap analysis suggestions to console
 - Save visualizations to the current working directory with specified filenames
@@ -58,7 +59,7 @@ The script must:
 ## Success Criteria
 
 ✅ Script runs without errors on the provided Trello JSON export  
-✅ At least 5 statistics are computed and printed  
+✅ At least five metrics are computed and printed  
 ✅ At least three PNG visualization files are created and saved  
 ✅ Visualisations are properly labeled (titles, axis labels, legends)   
 ✅ Code is clean and minimal (no unnecessary utilities or visualizations)  
