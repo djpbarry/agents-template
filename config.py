@@ -13,7 +13,8 @@ class PipelineConfig:
     orchestrator_model: str
     worker_model: str
     compiler_model: str
-    evaluator_model: str
+    executor_evaluator_model: str
+    requirements_evaluator_model: str
     docker_image: str
     available_libraries: str
     domain_notes: str
