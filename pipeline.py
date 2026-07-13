@@ -395,7 +395,7 @@ async def validate_execution(compiled_script: str, config: PipelineConfig, data_
     )
 
     validator_response = await llm_call(validator_input, system_prompt=EVALUATOR_SYSTEM,
-                                       model=config.evaluator_model, cache_prompt=True)
+                                       model=config.executor_evaluator_model, cache_prompt=True)
     evaluation = extract_xml(validator_response, "evaluation").strip()
     feedback = extract_xml(validator_response, "feedback").strip()
 
@@ -411,7 +411,7 @@ async def validate_requirements(compiled_script: str, report: str, exec_output: 
     )
 
     validator_response = await llm_call(validator_input, system_prompt=EVALUATOR_SYSTEM,
-                                       model=config.evaluator_model, cache_prompt=True)
+                                       model=config.requirements_evaluator_model, cache_prompt=True)
     evaluation = extract_xml(validator_response, "evaluation").strip()
     feedback = extract_xml(validator_response, "feedback").strip()
 
@@ -492,23 +492,39 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
             "worker_results": worker_results,
         }
 
-        print("Compiling script...")
-        compiled_script = await compile_script(orchestrator_results, config)
+        # INNER LOOP: Compiler + Execution Validator (up to 3 compilation attempts)
+        MAX_COMPILE_ATTEMPTS = 3
+        compiled_script = None
+        exec_output = None
+        execution_passed = False
 
-        # STAGE 1: Check execution
-        print("Validating execution...")
-        exec_verdict, exec_feedback, exec_output = await validate_execution(compiled_script, config, data_dir)
-        print(f"Execution: {exec_verdict}")
-        feedback_safe = exec_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
-        print(f"Feedback: {feedback_safe}")
+        for compile_attempt in range(MAX_COMPILE_ATTEMPTS):
+            print(f"\n  Compile attempt {compile_attempt + 1}/{MAX_COMPILE_ATTEMPTS}...")
+            compiled_script = await compile_script(orchestrator_results, config)
 
-        if exec_verdict == "FAIL":
-            # Execution failed - give feedback to compiler to fix
-            feedback_context = exec_feedback
+            print("  Validating execution...")
+            exec_verdict, exec_feedback, exec_output = await validate_execution(compiled_script, config, data_dir)
+            print(f"  Execution: {exec_verdict}")
+            feedback_safe = exec_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
+            print(f"  Feedback: {feedback_safe}")
+
+            if exec_verdict == "PASS":
+                execution_passed = True
+                break
+
+            # Execution failed - update orchestrator results with feedback for next compile attempt
+            if compile_attempt < MAX_COMPILE_ATTEMPTS - 1:
+                orchestrator_results["last_error"] = exec_feedback
+            else:
+                # Last attempt failed - will give feedback to orchestrator
+                feedback_context = f"Compilation/Execution failed after {MAX_COMPILE_ATTEMPTS} attempts: {exec_feedback}"
+
+        if not execution_passed:
+            print(f"\n  [FAILED] Could not compile working script after {MAX_COMPILE_ATTEMPTS} attempts.")
             continue
 
         # STAGE 2: Check requirements (only if execution passed)
-        print("Validating requirements...")
+        print("\nValidating requirements...")
         req_verdict, req_feedback = await validate_requirements(compiled_script, report, exec_output, config)
         print(f"Requirements: {req_verdict}")
         feedback_safe = req_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
