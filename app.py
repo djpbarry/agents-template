@@ -13,7 +13,7 @@ from pipeline import generate_and_optimize
 
 async def main(report_path: str, data_dir: str, output_dir: str, max_iterations: int):
     """Run the pipeline on a task report with domain-specific configuration."""
-    with open(report_path, 'r') as f:
+    with open(report_path, 'r', encoding='utf-8') as f:
         report_content = f.read()
 
     final_script = await generate_and_optimize(
@@ -27,7 +27,7 @@ async def main(report_path: str, data_dir: str, output_dir: str, max_iterations:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = Path(output_dir) / f"analysis_script_{timestamp}.py"
 
-    with open(output_file, 'w') as f:
+    with open(output_file, 'w', encoding='utf-8') as f:
         f.write(final_script)
 
     print("\n" + "=" * 80)

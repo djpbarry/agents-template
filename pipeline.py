@@ -123,7 +123,7 @@ CRITICAL RULES:
 4. One-line docstrings only
 5. Clean, simple, direct code
 6. Use only listed libraries + standard library
-7. If main() uses any Unicode characters in output: add sys.stdout.reconfigure(encoding='utf-8') at the start of main()
+7. If implementing main(): make its FIRST line `sys.stdout.reconfigure(encoding='utf-8')` (and import sys) so UTF-8 output works on all platforms
 
 Wrap your function in <response> tags like this:
 
@@ -150,14 +150,24 @@ RULES:
 2. One-line docstrings only
 3. Minimal, clean code (no defensive try/except unless critical)
 4. Remove duplicate/unused functions
-5. Add "# -*- coding: utf-8 -*-" if using non-ASCII characters
+
+ENCODING (MANDATORY - always include these, non-negotiable):
+- Line 1 MUST be exactly: # -*- coding: utf-8 -*-
+- After imports, the FIRST line of main() MUST be: sys.stdout.reconfigure(encoding='utf-8')
+- Always import sys
+- You may freely use UTF-8 characters (—, ✓, →, etc.); the above guarantees they work on all platforms
 
 Wrap the complete script in <response> tags exactly like this:
 
 <response>
-# Complete Python code here
+# -*- coding: utf-8 -*-
+import sys
 import ...
-def ...
+
+def main():
+    sys.stdout.reconfigure(encoding='utf-8')
+    ...
+
 if __name__ == '__main__':
     main()
 </response>
@@ -308,7 +318,7 @@ def execute_script_in_docker(script: str, data_dir: str, docker_image: str, time
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             script_path = Path(tmpdir) / "script.py"
-            script_path.write_text(script)
+            script_path.write_text(script, encoding="utf-8")
 
             docker_cmd = [
                 "docker", "run", "--rm",
