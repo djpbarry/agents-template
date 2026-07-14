@@ -590,9 +590,76 @@ def _candidate_score(candidate: dict) -> tuple:
     return (candidate["req_pass"], candidate["exec_pass"], valid_pngs)
 
 
+async def _run_one_design(report: str, input_metadata: str, config: PipelineConfig, data_dir: str,
+                          feedback_section: str, artifacts_dir: str, label: str,
+                          max_compile_attempts: int = 3) -> dict:
+    """Run one full design attempt (orchestrate → workers → compile/execute loop → requirements).
+
+    Returns a candidate dict: {script, exec_pass, req_pass, artifacts, artifacts_dir, feedback, label}.
+    `feedback` is empty on full pass, else a description of what failed (for the redesign history).
+    """
+    def log(msg):
+        print(f"  [{label}] {msg}")
+
+    # ORCHESTRATOR: design the architecture
+    orchestrator_input = format_prompt(
+        ORCHESTRATOR_PROMPT, report=report, input_data=input_metadata, feedback=feedback_section,
+    )
+    orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
+                                           model=config.orchestrator_model, cache_prompt=True)
+    analysis = extract_xml(orchestrator_response, "analysis")
+    tasks = parse_tasks(extract_xml(orchestrator_response, "tasks"))
+    log(f"Architecture: {len(tasks)} functions")
+
+    # WORKERS: implement each function in parallel
+    worker_results = await asyncio.gather(
+        *[_call_worker(t, i, report, input_metadata, config) for i, t in enumerate(tasks, 1)]
+    )
+    orchestrator_results = {"analysis": analysis, "worker_results": worker_results}
+
+    # INNER LOOP: Compiler + Execution Validator
+    compiled_script, exec_output, artifacts = None, "", []
+    execution_passed = False
+    compile_error = ""
+    for attempt in range(max_compile_attempts):
+        log(f"Compile attempt {attempt + 1}/{max_compile_attempts}...")
+        compiled_script = await compile_script(orchestrator_results, config, error_feedback=compile_error)
+        exec_verdict, exec_feedback, exec_output, artifacts = await validate_execution(
+            compiled_script, config, data_dir, artifacts_dir=artifacts_dir)
+        log(f"Execution: {exec_verdict}")
+        if exec_verdict == "PASS":
+            execution_passed = True
+            break
+        if attempt < max_compile_attempts - 1:
+            compile_error = exec_feedback
+
+    if not execution_passed:
+        log(f"[FAILED] Did not execute after {max_compile_attempts} attempts.")
+        return {
+            "script": compiled_script, "exec_pass": False, "req_pass": False,
+            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+            "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
+        }
+
+    # REQUIREMENTS VALIDATOR: only runs if execution passed
+    req_verdict, req_feedback = await validate_requirements(
+        compiled_script, report, exec_output, config, artifacts=artifacts)
+    log(f"Requirements: {req_verdict}")
+    req_passed = req_verdict == "PASS"
+    return {
+        "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
+        "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+        "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
+    }
+
+
 async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: str = None,
-                                max_iterations: int = 2, output_dir: str = None) -> str:
-    """Orchestrate → Compile → Evaluate → Redesign loop until script is production-ready."""
+                                max_iterations: int = 2, output_dir: str = None,
+                                designs_per_iteration: int = 3) -> str:
+    """Best-of-N loop: each iteration fans out N independent designs, keeps the best, redesigns.
+
+    Set designs_per_iteration=1 for the classic single-design-per-iteration behavior.
+    """
     # Accumulated failure history so each orchestrator redesign sees ALL prior issues,
     # not just the most recent one (prevents fix-A-breaks-B oscillation).
     feedback_history = []
@@ -600,27 +667,31 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
     # candidate (not merely whatever the last iteration produced).
     best_candidate = None
     input_metadata = config.extract_input_metadata(data_dir) if data_dir else "(No input data provided)"
-    # Base dir under which each iteration gets its OWN artifacts/iter_N subdir, so the
-    # files on disk always match the script we ultimately return.
+    # Base dir under which each design gets its OWN iter_N/design_M subdir, so the files
+    # on disk always match whichever script we ultimately return.
     artifacts_base = str(Path(output_dir) / "artifacts") if output_dir else None
 
-    def record_candidate(script, exec_pass, req_pass, iteration, artifacts_dir, artifacts):
-        """Keep the highest-scoring candidate; ties resolve to the earliest (avoids regressions)."""
+    def record_candidate(candidate: dict, iteration: int):
+        """Keep the highest-scoring candidate across all iterations; ties resolve to the earliest."""
         nonlocal best_candidate
-        candidate = {
-            "script": script, "exec_pass": exec_pass, "req_pass": req_pass,
-            "iteration": iteration, "artifacts_dir": artifacts_dir, "artifacts": artifacts,
-        }
+        candidate = {**candidate, "iteration": iteration}
         if best_candidate is None or _candidate_score(candidate) > _candidate_score(best_candidate):
             best_candidate = candidate
 
+    def print_artifacts(candidate: dict):
+        """Print the produced-file listing for a candidate, if any."""
+        if candidate["artifacts"] and candidate["artifacts_dir"]:
+            print(f"Produced {len(candidate['artifacts'])} file(s) in: {candidate['artifacts_dir']}")
+            for a in candidate["artifacts"]:
+                print(f"  - {a['name']} ({a['size']} bytes)")
+
     for iteration in range(max_iterations):
         print(f"\n{'=' * 80}")
-        print(f"ITERATION {iteration + 1}/{max_iterations}")
+        print(f"ITERATION {iteration + 1}/{max_iterations}  ({designs_per_iteration} parallel designs)")
         print(f"{'=' * 80}")
 
         if feedback_history:
-            print(f"\nRedesigning based on feedback...")
+            print(f"\nRedesigning based on accumulated feedback...")
             joined = "\n\n".join(feedback_history)
             feedback_section = (
                 "Previous attempts had the issues below. Address ALL of them at once; "
@@ -630,111 +701,46 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         else:
             feedback_section = ""
 
-        orchestrator_input = format_prompt(
-            ORCHESTRATOR_PROMPT,
-            report=report,
-            input_data=input_metadata,
-            feedback=feedback_section,
-        )
+        # Fan out N independent designs, each isolated in its own artifacts subdir.
+        design_dirs = [
+            str(Path(artifacts_base) / f"iter_{iteration + 1}" / f"design_{m + 1}") if artifacts_base else None
+            for m in range(designs_per_iteration)
+        ]
+        results = await asyncio.gather(*[
+            _run_one_design(report, input_metadata, config, data_dir, feedback_section,
+                            design_dirs[m], label=f"I{iteration + 1}.D{m + 1}")
+            for m in range(designs_per_iteration)
+        ])
 
-        orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
-                                               model=config.orchestrator_model, cache_prompt=True)
-        analysis = extract_xml(orchestrator_response, "analysis")
-        tasks_xml = extract_xml(orchestrator_response, "tasks")
-        tasks = parse_tasks(tasks_xml)
+        # Score every design and update the global best.
+        for candidate in results:
+            record_candidate(candidate, iteration + 1)
 
-        print(f"\nArchitecture: {len(tasks)} functions")
+        iter_best = max(results, key=_candidate_score)
+        print(f"\nIteration {iteration + 1} best design: {iter_best['label']} "
+              f"(exec={iter_best['exec_pass']}, req={iter_best['req_pass']})")
 
-        print("Generating worker implementations...")
-        worker_results = await asyncio.gather(
-            *[_call_worker(task_info, i, report, input_metadata, config) for i, task_info in
-              enumerate(tasks, 1)]
-        )
-
-        orchestrator_results = {
-            "analysis": analysis,
-            "worker_results": worker_results,
-        }
-
-        # INNER LOOP: Compiler + Execution Validator (up to 3 compilation attempts)
-        MAX_COMPILE_ATTEMPTS = 3
-        compiled_script = None
-        exec_output = None
-        artifacts = []
-        execution_passed = False
-        # Each iteration writes to its own subdir so a returned earlier script's files
-        # aren't clobbered by a later iteration's run.
-        iter_artifacts_dir = str(Path(artifacts_base) / f"iter_{iteration + 1}") if artifacts_base else None
-
-        compile_error = ""
-        for compile_attempt in range(MAX_COMPILE_ATTEMPTS):
-            print(f"\n  Compile attempt {compile_attempt + 1}/{MAX_COMPILE_ATTEMPTS}...")
-            compiled_script = await compile_script(orchestrator_results, config, error_feedback=compile_error)
-
-            print("  Validating execution...")
-            exec_verdict, exec_feedback, exec_output, artifacts = await validate_execution(
-                compiled_script, config, data_dir, artifacts_dir=iter_artifacts_dir)
-            print(f"  Execution: {exec_verdict}")
-            feedback_safe = exec_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
-            print(f"  Feedback: {feedback_safe}")
-
-            if exec_verdict == "PASS":
-                execution_passed = True
-                break
-
-            # Execution failed - pass the error to the next compile attempt
-            if compile_attempt < MAX_COMPILE_ATTEMPTS - 1:
-                compile_error = exec_feedback
-
-        if not execution_passed:
-            print(f"\n  [FAILED] Could not compile working script after {MAX_COMPILE_ATTEMPTS} attempts.")
-            # Still a candidate (a broken script beats nothing), but ranked lowest.
-            record_candidate(compiled_script, exec_pass=False, req_pass=False, iteration=iteration + 1,
-                             artifacts_dir=iter_artifacts_dir, artifacts=artifacts)
-            feedback_history.append(
-                f"[Iteration {iteration + 1}] Execution failed after {MAX_COMPILE_ATTEMPTS} "
-                f"compile attempts: {exec_feedback}"
-            )
-            continue
-
-        # STAGE 2: Check requirements (only if execution passed)
-        print("\nValidating requirements...")
-        req_verdict, req_feedback = await validate_requirements(
-            compiled_script, report, exec_output, config, artifacts=artifacts)
-        print(f"Requirements: {req_verdict}")
-        feedback_safe = req_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
-        print(f"Feedback: {feedback_safe}")
-
-        req_passed = req_verdict == "PASS"
-        record_candidate(compiled_script, exec_pass=True, req_pass=req_passed, iteration=iteration + 1,
-                         artifacts_dir=iter_artifacts_dir, artifacts=artifacts)
-
-        if req_passed:
+        if iter_best["req_pass"]:
             print(f"\n{'=' * 80}")
-            print("[OK] Script is production-ready!")
-            if artifacts and iter_artifacts_dir:
-                print(f"Produced {len(artifacts)} file(s) in: {iter_artifacts_dir}")
-                for a in artifacts:
-                    print(f"  - {a['name']} ({a['size']} bytes)")
+            print(f"[OK] Script is production-ready! (design {iter_best['label']})")
+            print_artifacts(iter_best)
             print(f"{'=' * 80}\n")
-            return compiled_script
+            return iter_best["script"]
 
-        # Requirements failed - add to history so the next redesign sees it alongside the rest
-        feedback_history.append(
-            f"[Iteration {iteration + 1}] Executed cleanly but requirements not met: {req_feedback}"
-        )
+        # No design passed - push EVERY design's failure report into the shared history
+        # so the next round's orchestrators see the full set of dead ends.
+        for candidate in results:
+            if candidate["feedback"]:
+                feedback_history.append(f"[Iteration {iteration + 1} / {candidate['label']}] {candidate['feedback']}")
 
     print(f"\n{'=' * 80}")
     print("[WARNING] Max iterations reached. Returning best effort.")
     if best_candidate:
         status = "executed + requirements" if best_candidate["req_pass"] else (
             "executed cleanly" if best_candidate["exec_pass"] else "did not execute")
-        print(f"Best candidate: iteration {best_candidate['iteration']} ({status}).")
-        if best_candidate["artifacts"] and best_candidate["artifacts_dir"]:
-            print(f"Produced {len(best_candidate['artifacts'])} file(s) in: {best_candidate['artifacts_dir']}")
-            for a in best_candidate["artifacts"]:
-                print(f"  - {a['name']} ({a['size']} bytes)")
+        print(f"Best candidate: iteration {best_candidate['iteration']}, design {best_candidate['label']} ({status}).")
+        print_artifacts(best_candidate)
     print(f"{'=' * 80}\n")
-    return best_candidate["script"] if best_candidate else compiled_script
+    return best_candidate["script"] if best_candidate else None
 
 
