@@ -251,19 +251,31 @@ async def llm_call(prompt: str, system_prompt: str = None, model: str = None, ca
         ]
 
     messages = [{"role": "user", "content": prompt}]
-    response = await async_client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_content,
-        messages=messages,
-    )
-    for block in response.content:
-        if block.type == "text":
-            return block.text
 
-    # Debug: check what we got
+    # These models use adaptive thinking; if max_tokens is exhausted during the
+    # thinking phase the response comes back with a thinking block but no text.
+    # Retry once with a larger budget before giving up.
+    for attempt, tokens in enumerate((max_tokens, max_tokens * 2)):
+        response = await async_client.messages.create(
+            model=model,
+            max_tokens=tokens,
+            system=system_content,
+            messages=messages,
+        )
+        text = "".join(block.text for block in response.content if block.type == "text")
+        if text.strip():
+            return text
+
+        # No text produced. If we ran out of tokens (likely during thinking), retry bigger.
+        if response.stop_reason != "max_tokens":
+            break
+
     content_types = [block.type for block in response.content]
-    raise ValueError(f"No text content in response. Got: {content_types}")
+    raise ValueError(
+        f"No text content in response (stop_reason={response.stop_reason}, "
+        f"blocks={content_types}). The token budget was likely consumed by thinking; "
+        f"try a larger max_tokens."
+    )
 
 
 # Helper functions for data extraction and processing
