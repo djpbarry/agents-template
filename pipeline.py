@@ -579,9 +579,15 @@ async def _call_worker(task_info: dict, task_index: int, report: str, input_meta
     }
 
 
-def _candidate_score(candidate: dict) -> int:
-    """Rank a candidate script: requirements-pass beats execution-pass beats neither."""
-    return (2 if candidate["req_pass"] else 0) + (1 if candidate["exec_pass"] else 0)
+def _candidate_score(candidate: dict) -> tuple:
+    """Rank candidates lexicographically: requirements-pass, then execution-pass, then valid-PNG count.
+
+    Tuples compare left-to-right and bools sort as 0/1, so a requirements-passing script always
+    wins; among equal pass/fail status, the one that produced more non-zero-byte PNGs ranks higher.
+    """
+    valid_pngs = sum(1 for a in candidate["artifacts"]
+                     if a["name"].lower().endswith(".png") and a["size"] > 0)
+    return (candidate["req_pass"], candidate["exec_pass"], valid_pngs)
 
 
 async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: str = None,
