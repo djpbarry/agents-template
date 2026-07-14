@@ -419,9 +419,11 @@ async def validate_execution(compiled_script: str, config: PipelineConfig, data_
         if exec_success is None:
             execution_result = f"Docker unavailable: {exec_output}"
         elif exec_success:
-            execution_result = f"Script executed successfully.\n\nOutput:\n{exec_output[:500]}"
+            # Keep the TAIL: final printed output (incl. data-gap suggestions) matters most
+            execution_result = f"Script executed successfully.\n\nOutput:\n{exec_output[-2000:]}"
         else:
-            execution_result = f"Script execution failed.\n\nError:\n{exec_output[:500]}"
+            # Keep the TAIL: Python puts the actual exception last, after the traceback frames
+            execution_result = f"Script execution failed.\n\nError:\n{exec_output[-2000:]}"
 
     validator_input = EXECUTION_VALIDATOR_PROMPT.format(
         content=compiled_script,
@@ -451,7 +453,8 @@ async def validate_requirements(compiled_script: str, report: str, exec_output: 
     validator_input = REQUIREMENTS_VALIDATOR_PROMPT.format(
         report=report,
         content=compiled_script,
-        execution_result=f"Output:\n{exec_output[:1000]}"
+        # Keep the TAIL: the script prints metrics then data-gap suggestions at the very end
+        execution_result=f"Output:\n{exec_output[-3000:]}"
     )
 
     validator_response = await llm_call(validator_input, system_prompt=EVALUATOR_SYSTEM,
