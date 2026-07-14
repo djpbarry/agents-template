@@ -315,10 +315,27 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
     return tasks
 
 
+# Sandbox flags for running untrusted, LLM-generated code. Docker here provides both
+# dependency pinning AND isolation. Tune these if a host/platform rejects a flag.
+DOCKER_SANDBOX_FLAGS = [
+    "--network", "none",              # no network access
+    "--memory", "1g",                 # cap RAM
+    "--memory-swap", "1g",            # == memory, so swap is disabled
+    "--cpus", "2",                    # cap CPU
+    "--pids-limit", "256",            # limit processes (fork-bomb guard)
+    "--read-only",                    # read-only root filesystem
+    "--cap-drop", "ALL",              # drop all Linux capabilities
+    "--security-opt", "no-new-privileges",  # block privilege escalation
+    "--user", "1000:1000",            # run as non-root
+    # Writable scratch for the non-root user under a read-only root (matplotlib/font cache, etc.)
+    "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+]
+
+
 def execute_script_in_docker(script: str, data_dir: str, docker_image: str, timeout: int = 300,
                              artifacts_dir: str = None) -> tuple[bool, str, list[dict]]:
     """
-    Execute script in Docker container to verify it works and capture produced files.
+    Execute script in a sandboxed Docker container to verify it works and capture produced files.
     Returns (success, output_or_error, artifacts) or (None, message, []) if Docker unavailable.
     Each artifact is a dict: {"name": str, "size": int}. Files are copied to artifacts_dir if given.
     """
@@ -334,10 +351,14 @@ def execute_script_in_docker(script: str, data_dir: str, docker_image: str, time
 
             docker_cmd = [
                 "docker", "run", "--rm",
+                *DOCKER_SANDBOX_FLAGS,
                 "-v", f"{Path(data_dir).absolute()}:/data:ro",
                 "-v", f"{tmpdir}:/work",
                 "-w", "/work",
                 "-e", "INPUT_FOLDER=/data",
+                # Point HOME and matplotlib's cache at the writable tmpfs (root fs is read-only)
+                "-e", "HOME=/tmp",
+                "-e", "MPLCONFIGDIR=/tmp/mpl",
                 docker_image,
                 "python", "script.py"
             ]
