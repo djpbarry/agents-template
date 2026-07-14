@@ -273,6 +273,14 @@ def extract_xml(text: str, tag: str) -> str:
     return match.group(1) if match else ""
 
 
+def format_prompt(template: str, **kwargs) -> str:
+    """Format a prompt template, raising a clear error if a variable is missing."""
+    try:
+        return template.format(**kwargs)
+    except KeyError as e:
+        raise ValueError(f"Missing required prompt variable: {e}") from e
+
+
 def parse_tasks(tasks_xml: str) -> list[dict]:
     """Parse XML tasks into a list of task dictionaries."""
     tasks = []
@@ -513,11 +521,11 @@ async def validate_requirements(compiled_script: str, report: str, exec_output: 
     return evaluation, feedback
 
 
-async def _call_worker(task_info: dict, task_index: int, report: str, input_metadata: str, config: PipelineConfig,
-                       orchestrator: 'FlexibleOrchestrator') -> dict:
+async def _call_worker(task_info: dict, task_index: int, report: str, input_metadata: str,
+                       config: PipelineConfig) -> dict:
     """Call worker for a single task. Used for parallel execution."""
     func_name = task_info.get("function", f"task_{task_index}")
-    worker_input = orchestrator._format_prompt(
+    worker_input = format_prompt(
         WORKER_PROMPT,
         original_report=report,
         function=func_name,
@@ -541,12 +549,6 @@ async def _call_worker(task_info: dict, task_index: int, report: str, input_meta
 async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: str = None,
                                 max_iterations: int = 2, output_dir: str = None) -> str:
     """Orchestrate → Compile → Evaluate → Redesign loop until script is production-ready."""
-    orchestrator = FlexibleOrchestrator(
-        orchestrator_prompt=ORCHESTRATOR_PROMPT,
-        worker_prompt=WORKER_PROMPT,
-        config=config,
-    )
-
     feedback_context = ""
     input_metadata = config.extract_input_metadata(data_dir) if data_dir else "(No input data provided)"
     # Where produced files (PNGs, etc.) are copied out of the ephemeral Docker temp dir
@@ -563,7 +565,7 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         else:
             feedback_section = ""
 
-        orchestrator_input = orchestrator._format_prompt(
+        orchestrator_input = format_prompt(
             ORCHESTRATOR_PROMPT,
             report=report,
             input_data=input_metadata,
@@ -580,7 +582,7 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
 
         print("Generating worker implementations...")
         worker_results = await asyncio.gather(
-            *[_call_worker(task_info, i, report, input_metadata, config, orchestrator) for i, task_info in
+            *[_call_worker(task_info, i, report, input_metadata, config) for i, task_info in
               enumerate(tasks, 1)]
         )
 
@@ -650,104 +652,3 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
     return compiled_script
 
 
-class FlexibleOrchestrator:
-    """Break down tasks and run them in parallel using worker LLMs."""
-
-    def __init__(
-            self,
-            orchestrator_prompt: str,
-            worker_prompt: str,
-            config: PipelineConfig,
-    ):
-        """Initialize with prompt templates and config."""
-        self.orchestrator_prompt = orchestrator_prompt
-        self.worker_prompt = worker_prompt
-        self.config = config
-
-    def _format_prompt(self, template: str, **kwargs) -> str:
-        """Format a prompt template with variables."""
-        try:
-            return template.format(**kwargs)
-        except KeyError as e:
-            raise ValueError(f"Missing required prompt variable: {e}") from e
-
-    async def process(self, report: str, input_data: str) -> dict:
-        """Process task by breaking it down and running subtasks in parallel."""
-
-        orchestrator_input = self._format_prompt(
-            self.orchestrator_prompt,
-            report=report,
-            input_data=input_data,
-            feedback="",
-        )
-        orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
-                                               model=self.config.orchestrator_model)
-
-        analysis = extract_xml(orchestrator_response, "analysis")
-        tasks_xml = extract_xml(orchestrator_response, "tasks")
-        tasks = parse_tasks(tasks_xml)
-
-        print("\n" + "=" * 80)
-        print("SOFTWARE ARCHITECT ANALYSIS")
-        print("=" * 80)
-        print(f"\n{analysis}\n")
-
-        print("\n" + "=" * 80)
-        print(f"IDENTIFIED {len(tasks)} SUB-TASKS")
-        print("=" * 80)
-        for i, task_info in enumerate(tasks, 1):
-            print(f"\n{i}. {task_info.get('function', 'unknown')}")
-            print(f"   {task_info.get('description', '')}")
-            print(f"   {task_info.get('input', '')}")
-            print(f"   {task_info.get('output', '')}")
-
-        print("\n" + "=" * 80)
-        print("GENERATING CONTENT")
-        print("=" * 80 + "\n")
-
-        async def _process_task(i, task_info):
-            func_name = task_info.get("function", f"task_{i}")
-            print(f"[{i}/{len(tasks)}] Processing: {func_name}...")
-
-            worker_input = self._format_prompt(
-                self.worker_prompt,
-                original_report=report,
-                function=func_name,
-                description=task_info.get("description", ""),
-                input=task_info.get("input", ""),
-                output=task_info.get("output", ""),
-                input_data=input_data,
-                library_notes=self.config.available_libraries,
-                domain_notes=self.config.domain_notes,
-            )
-
-            worker_response = await llm_call(worker_input, system_prompt=WORKER_SYSTEM, model=self.config.worker_model)
-            worker_content = extract_xml(worker_response, "response")
-
-            if not worker_content or not worker_content.strip():
-                print(f"[WARNING] Worker '{func_name}' returned no content")
-                worker_content = f"[Error: Worker '{func_name}' failed to generate content]"
-
-            return {
-                "function": func_name,
-                "description": task_info.get("description", ""),
-                "result": worker_content,
-            }
-
-        worker_results = await asyncio.gather(
-            *[_process_task(i, task_info) for i, task_info in enumerate(tasks, 1)]
-        )
-
-        print("\n" + "=" * 80)
-        print("RESULTS")
-        print("=" * 80)
-        for i, result in enumerate(worker_results, 1):
-            print(f"\n{'-' * 80}")
-            print(f"Function {i}: {result['function'].upper()}")
-            print(f"{'-' * 80}")
-            print(f"\n{result['result']}\n")
-
-        return {
-            "analysis": analysis,
-            "worker_results": worker_results,
-        }
