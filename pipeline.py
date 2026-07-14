@@ -579,22 +579,44 @@ async def _call_worker(task_info: dict, task_index: int, report: str, input_meta
     }
 
 
+def _candidate_score(candidate: dict) -> int:
+    """Rank a candidate script: requirements-pass beats execution-pass beats neither."""
+    return (2 if candidate["req_pass"] else 0) + (1 if candidate["exec_pass"] else 0)
+
+
 async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: str = None,
                                 max_iterations: int = 2, output_dir: str = None) -> str:
     """Orchestrate → Compile → Evaluate → Redesign loop until script is production-ready."""
-    feedback_context = ""
+    # Accumulated failure history so each orchestrator redesign sees ALL prior issues,
+    # not just the most recent one (prevents fix-A-breaks-B oscillation).
+    feedback_history = []
+    # Best script seen so far, kept across iterations so a timeout returns the best
+    # candidate (not merely whatever the last iteration produced).
+    best_candidate = None
     input_metadata = config.extract_input_metadata(data_dir) if data_dir else "(No input data provided)"
     # Where produced files (PNGs, etc.) are copied out of the ephemeral Docker temp dir
     artifacts_dir = str(Path(output_dir) / "artifacts") if output_dir else None
+
+    def record_candidate(script, exec_pass, req_pass, iteration):
+        """Keep the highest-scoring candidate; ties resolve to the earliest (avoids regressions)."""
+        nonlocal best_candidate
+        candidate = {"script": script, "exec_pass": exec_pass, "req_pass": req_pass, "iteration": iteration}
+        if best_candidate is None or _candidate_score(candidate) > _candidate_score(best_candidate):
+            best_candidate = candidate
 
     for iteration in range(max_iterations):
         print(f"\n{'=' * 80}")
         print(f"ITERATION {iteration + 1}/{max_iterations}")
         print(f"{'=' * 80}")
 
-        if feedback_context:
+        if feedback_history:
             print(f"\nRedesigning based on feedback...")
-            feedback_section = f"Previous feedback to address:\n{feedback_context}"
+            joined = "\n\n".join(feedback_history)
+            feedback_section = (
+                "Previous attempts had the issues below. Address ALL of them at once; "
+                "do NOT reintroduce an earlier problem while fixing a later one:\n"
+                f"{joined}"
+            )
         else:
             feedback_section = ""
 
@@ -650,12 +672,15 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
             # Execution failed - pass the error to the next compile attempt
             if compile_attempt < MAX_COMPILE_ATTEMPTS - 1:
                 compile_error = exec_feedback
-            else:
-                # Last attempt failed - hand feedback up to the orchestrator to redesign
-                feedback_context = f"Compilation/Execution failed after {MAX_COMPILE_ATTEMPTS} attempts: {exec_feedback}"
 
         if not execution_passed:
             print(f"\n  [FAILED] Could not compile working script after {MAX_COMPILE_ATTEMPTS} attempts.")
+            # Still a candidate (a broken script beats nothing), but ranked lowest.
+            record_candidate(compiled_script, exec_pass=False, req_pass=False, iteration=iteration + 1)
+            feedback_history.append(
+                f"[Iteration {iteration + 1}] Execution failed after {MAX_COMPILE_ATTEMPTS} "
+                f"compile attempts: {exec_feedback}"
+            )
             continue
 
         # STAGE 2: Check requirements (only if execution passed)
@@ -666,7 +691,10 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         feedback_safe = req_feedback.replace('✓', '[OK]').replace('✗', '[FAIL]').replace('•', '-')
         print(f"Feedback: {feedback_safe}")
 
-        if req_verdict == "PASS":
+        req_passed = req_verdict == "PASS"
+        record_candidate(compiled_script, exec_pass=True, req_pass=req_passed, iteration=iteration + 1)
+
+        if req_passed:
             print(f"\n{'=' * 80}")
             print("[OK] Script is production-ready!")
             if artifacts and artifacts_dir:
@@ -676,12 +704,18 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
             print(f"{'=' * 80}\n")
             return compiled_script
 
-        # Requirements failed - give feedback to orchestrator to redesign
-        feedback_context = req_feedback
+        # Requirements failed - add to history so the next redesign sees it alongside the rest
+        feedback_history.append(
+            f"[Iteration {iteration + 1}] Executed cleanly but requirements not met: {req_feedback}"
+        )
 
     print(f"\n{'=' * 80}")
     print("[WARNING] Max iterations reached. Returning best effort.")
+    if best_candidate:
+        status = "executed + requirements" if best_candidate["req_pass"] else (
+            "executed cleanly" if best_candidate["exec_pass"] else "did not execute")
+        print(f"Best candidate: iteration {best_candidate['iteration']} ({status}).")
     print(f"{'=' * 80}\n")
-    return compiled_script
+    return best_candidate["script"] if best_candidate else compiled_script
 
 
