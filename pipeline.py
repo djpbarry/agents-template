@@ -590,11 +590,14 @@ def _candidate_score(candidate: dict) -> tuple:
     """Rank candidates lexicographically: requirements-pass, then execution-pass, then valid-PNG count.
 
     Tuples compare left-to-right and bools sort as 0/1, so a requirements-passing script always
-    wins; among equal pass/fail status, the one that produced more non-zero-byte PNGs ranks higher.
+    wins; among equal pass/fail status, the one that produced more non-zero-byte PNGs ranks higher -
+    but only up to the 3-PNG minimum the requirements evaluator checks for (REQUIREMENTS_VALIDATOR_PROMPT).
+    Beyond that, more plots isn't "better" (the report guidance penalizes over-plotting), so the count
+    is capped rather than rewarding designs that just generate extra visualizations to win the tie-break.
     """
     valid_pngs = sum(1 for a in candidate["artifacts"]
                      if a["name"].lower().endswith(".png") and a["size"] > 0)
-    return (candidate["req_pass"], candidate["exec_pass"], valid_pngs)
+    return (candidate["req_pass"], candidate["exec_pass"], min(valid_pngs, 3))
 
 
 async def _run_one_design(report: str, input_metadata: str, config: PipelineConfig, data_dir: str,
