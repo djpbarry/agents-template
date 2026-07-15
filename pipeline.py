@@ -92,6 +92,8 @@ Success Criteria (the finished script must satisfy every item below - no more, n
 
 {feedback}
 
+Approach for this design: {stance}
+
 STEP 1: ANALYZE THE DATA
 Examine the available fields and structures.
 
@@ -626,7 +628,7 @@ def _log_iteration_diversity(results: list[dict], iteration: int) -> None:
 
 
 async def _run_one_design(report: str, criteria: str, input_metadata: str, config: PipelineConfig, data_dir: str,
-                          feedback_section: str, artifacts_dir: str, label: str,
+                          feedback_section: str, stance: str, artifacts_dir: str, label: str,
                           max_compile_attempts: int = 3) -> dict:
     """Run one full design attempt (orchestrate → workers → compile/execute loop → requirements).
 
@@ -639,7 +641,8 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
 
     # ORCHESTRATOR: design the architecture
     orchestrator_input = format_prompt(
-        ORCHESTRATOR_PROMPT, report=report, criteria=criteria, input_data=input_metadata, feedback=feedback_section,
+        ORCHESTRATOR_PROMPT, report=report, criteria=criteria, input_data=input_metadata,
+        feedback=feedback_section, stance=stance,
     )
     orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
                                            model=config.orchestrator_model, cache_prompt=True)
@@ -769,15 +772,18 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         else:
             feedback_section = ""
 
-        # Fan out N independent designs, each isolated in its own artifacts subdir.
+        # Fan out N independent designs, each isolated in its own artifacts subdir. Stances cycle
+        # (design m gets design_stances[m % len]) so extra designs beyond the stance list length
+        # just repeat stances rather than erroring - no LLM call needed to pick them.
         design_dirs = [
             str(Path(artifacts_base) / f"iter_{iteration + 1}" / f"design_{m + 1}") if artifacts_base else None
             for m in range(designs_per_iteration)
         ]
         labels = [f"I{iteration + 1}.D{m + 1}" for m in range(designs_per_iteration)]
+        stances = [config.design_stances[m % len(config.design_stances)] for m in range(designs_per_iteration)]
         raw_results = await asyncio.gather(*[
             _run_one_design(report, criteria, input_metadata, config, data_dir, feedback_section,
-                            design_dirs[m], label=labels[m])
+                            stances[m], design_dirs[m], label=labels[m])
             for m in range(designs_per_iteration)
         ], return_exceptions=True)
 
