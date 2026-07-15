@@ -109,6 +109,11 @@ The pipeline is retargeted entirely through `PipelineConfig` (`config.py`) — n
 - `extract_input_metadata(data_dir) -> str` — scans the input directory and returns a description fed to
   the orchestrator (e.g. `bioimage_config.py` reads TIFF shape/channel metadata via `bioio.BioImage`;
   `trello_config.py` summarizes JSON export structure).
+- `design_stances: list[str]` (optional — defaults to `DEFAULT_DESIGN_STANCES` in `config.py`, so no
+  domain config needs to set it). Design `m` within an iteration gets `design_stances[m % len(...)]`,
+  injected into its orchestrator prompt as a one-line "Approach for this design:" steer (e.g.
+  conventional/robust, depth-first, contrarian) so the `designs_per_iteration` parallel designs explore
+  different regions of the solution space with no extra LLM calls.
 
 Then wire the new config into `app.py`'s `--config` choices. Note: `trello_config.py` currently
 references a `python-analysis:latest` Docker image that this repo's `Dockerfile` does not build (only
