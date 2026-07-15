@@ -39,11 +39,21 @@ There is no test suite, linter config, or CI in this repo currently.
 ### Pipeline flow (`pipeline.py`)
 
 ```
-Orchestrator (1 call)  →  Workers (parallel, 1 call per function)  →  Compiler+Execution loop  →  Requirements Evaluator
+Criteria extraction (1 call, once)  →  Orchestrator (1 call)  →  Workers (parallel, 1 call per function)  →  Compiler+Execution loop  →  Requirements Evaluator
 ```
 
-- **Orchestrator**: given the task report + input metadata, designs a minimal architecture — in practice
-  just `load_data()` and `main()` (see `ORCHESTRATOR_PROMPT`). Returns an `<analysis>` block and a
+- **Criteria extraction**: before any design work starts, `generate_and_optimize` makes a single
+  `CRITERIA_PROMPT` call that distills the raw report into a `<criteria>` rubric — the concrete,
+  checkable success conditions the report actually states. This runs once per pipeline invocation
+  (not per design, not per iteration) and the resulting `criteria` string is threaded into both the
+  orchestrator and requirements-validator prompts below. This is what makes the pipeline genuinely
+  domain-agnostic: without it, those two prompts would have to hardcode one report's specific shape of
+  "success" (a fixed metric count, PNG count, `load_data()`/`main()`-only architecture) as if it were
+  universal, which silently pre-decides every axis a design could vary on and defeats the purpose of
+  swapping in a new `PipelineConfig` for a different domain.
+- **Orchestrator**: given the task report + criteria + input metadata, designs a minimal architecture to
+  satisfy exactly what the criteria calls for — no more, no less — typically `load_data()` and `main()`,
+  but not hardcoded to only that shape (see `ORCHESTRATOR_PROMPT`). Returns an `<analysis>` block and a
   `<tasks>` list parsed by `parse_tasks()`.
 - **Workers**: one parallel LLM call per task (`asyncio.gather` in `_call_worker`), each implementing a
   single function to spec with no helpers, no defensive try/except.
@@ -54,9 +64,9 @@ Orchestrator (1 call)  →  Workers (parallel, 1 call per function)  →  Compil
   it is never reported as `PASS`, since nothing was actually verified to run). Retries up to
   `max_compile_attempts` (default 3) on `FAIL`, feeding the execution error back into the next compile
   attempt; `SKIPPED` is terminal too (there's no error to fix, so retrying wastes attempts).
-- **Requirements Evaluator**: only runs once execution passes; checks the script produced 5+ metrics and
-  3+ non-zero-byte PNGs, using the *actual on-disk file listing*, not just what the code claims to write
-  (`_format_artifacts` flags 0-byte files as suspect).
+- **Requirements Evaluator**: only runs once execution passed or was skipped; checks the script's actual
+  output against every item in the extracted criteria, using the *actual on-disk file listing*, not just
+  what the code claims to write (`_format_artifacts` flags 0-byte files as suspect).
 
 ### Best-of-N outer loop (`generate_and_optimize`)
 
