@@ -627,6 +627,33 @@ def _log_iteration_diversity(results: list[dict], iteration: int) -> None:
     print(f"[diversity] iteration {iteration}: mean={mean_similarity:.2f}  pairs: {pair_str}")
 
 
+def _journal_entry(candidate: dict, iteration: int) -> str:
+    """One line recording what a design tried and what happened - not just failures.
+
+    Plain structured text, no LLM summarization: label, a one-line approach summary (the first
+    line of its <analysis>), the exec/requirements outcome, how many real artifacts it produced,
+    and - only if it failed - the specific reason from its feedback.
+    """
+    label = candidate.get("label", "?")
+    analysis = (candidate.get("analysis") or "").strip()
+    approach = analysis.splitlines()[0].strip() if analysis else "(no analysis available)"
+    if len(approach) > 200:
+        approach = approach[:200].rstrip() + "..."
+
+    exec_verdict = candidate.get("exec_verdict", "ERROR")
+    req_pass = candidate.get("req_pass", False)
+    req_status = "PASS" if req_pass else ("FAIL" if exec_verdict == "PASS" else "n/a")
+    valid_artifacts = sum(1 for a in candidate.get("artifacts") or [] if a.get("size", 0) > 0)
+
+    entry = (
+        f"[Iteration {iteration}] {label}: approach=\"{approach}\" | "
+        f"exec={exec_verdict} req={req_status} | artifacts={valid_artifacts}"
+    )
+    if not req_pass and candidate.get("feedback"):
+        entry += f" | reason: {candidate['feedback']}"
+    return entry
+
+
 async def _run_one_design(report: str, criteria: str, input_metadata: str, config: PipelineConfig, data_dir: str,
                           feedback_section: str, stance: str, artifacts_dir: str, label: str,
                           max_compile_attempts: int = 3) -> dict:
@@ -680,6 +707,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
         return {
             "script": compiled_script, "exec_pass": False, "req_pass": False,
             "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
+            "exec_verdict": "FAIL",
             "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
         }
 
@@ -691,6 +719,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
         return {
             "script": compiled_script, "exec_pass": False, "req_pass": False,
             "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
+            "exec_verdict": "SKIPPED",
             "feedback": f"Execution was not verified, so requirements cannot be checked: {exec_feedback}",
         }
 
@@ -703,6 +732,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     return {
         "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
         "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
+        "exec_verdict": "PASS",
         "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
     }
 
@@ -762,11 +792,13 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         print(f"{'=' * 80}")
 
         if feedback_history:
-            print(f"\nRedesigning based on accumulated feedback...")
+            print(f"\nRedesigning based on accumulated journal...")
             joined = "\n\n".join(feedback_history)
             feedback_section = (
-                "Previous attempts had the issues below. Address ALL of them at once; "
-                "do NOT reintroduce an earlier problem while fixing a later one:\n"
+                "Journal of every design tried so far, what happened, and why (not just a list of "
+                "complaints) - use it to build on what worked and avoid repeating what didn't. "
+                "Address ALL known issues at once; do NOT reintroduce an earlier problem while "
+                "fixing a later one:\n"
                 f"{joined}"
             )
         else:
@@ -795,7 +827,7 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
                 print(f"  [{label}] [ERROR] {result!r}")
                 result = {
                     "script": None, "exec_pass": False, "req_pass": False,
-                    "artifacts": [], "artifacts_dir": None, "label": label,
+                    "artifacts": [], "artifacts_dir": None, "label": label, "exec_verdict": "ERROR",
                     "feedback": f"Design raised an exception before completing: {result!r}",
                 }
             results.append(result)
@@ -805,6 +837,11 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         # Score every design and update the global best.
         for candidate in results:
             record_candidate(candidate, iteration + 1)
+
+        # Journal EVERY design this iteration (winners, losers, and exceptions alike) - a record
+        # of what was tried and what happened, not just a list of complaints from the losers.
+        for candidate in results:
+            feedback_history.append(_journal_entry(candidate, iteration + 1))
 
         iter_best = max(results, key=_candidate_score)
         print(f"\nIteration {iteration + 1} best design: {iter_best['label']} "
@@ -816,12 +853,6 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
             print_artifacts(iter_best)
             print(f"{'=' * 80}\n")
             return iter_best["script"]
-
-        # No design passed - push EVERY design's failure report into the shared history
-        # so the next round's orchestrators see the full set of dead ends.
-        for candidate in results:
-            if candidate["feedback"]:
-                feedback_history.append(f"[Iteration {iteration + 1} / {candidate['label']}] {candidate['feedback']}")
 
     print(f"\n{'=' * 80}")
     print("[WARNING] Max iterations reached. Returning best effort.")
