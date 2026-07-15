@@ -588,13 +588,51 @@ def _candidate_score(candidate: dict) -> tuple:
     return (candidate["req_pass"], candidate["exec_pass"], min(valid_pngs, 3))
 
 
+_TOKEN_PATTERN = re.compile(r'[a-z0-9]+')
+
+
+def _token_set(text: str) -> set:
+    """Lowercase, split on non-alphanumerics, drop tokens under 3 chars."""
+    return {t for t in _TOKEN_PATTERN.findall(text.lower()) if len(t) >= 3}
+
+
+def _jaccard(a: set, b: set) -> float:
+    """Token-set Jaccard similarity. Two empty sets score 0.0 - no text means no evidence of
+    similarity, not a false "identical designs" signal."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _log_iteration_diversity(results: list[dict], iteration: int) -> None:
+    """Measurement only - log pairwise token-set Jaccard similarity across designs' <analysis> text.
+    Does not affect selection, feedback, or fan-out. Candidates without an "analysis" key (e.g. a
+    design that raised an exception before the orchestrator call completed) are skipped.
+    """
+    designs = [(c["label"], _token_set(c["analysis"])) for c in results if "analysis" in c]
+    pairs = [
+        (designs[i][0], designs[j][0], _jaccard(designs[i][1], designs[j][1]))
+        for i in range(len(designs))
+        for j in range(i + 1, len(designs))
+    ]
+
+    if not pairs:
+        print(f"[diversity] iteration {iteration}: mean=n/a (fewer than 2 analyses to compare)")
+        return
+
+    mean_similarity = sum(sim for _, _, sim in pairs) / len(pairs)
+    pair_str = ", ".join(f"{a}~{b}={sim:.2f}" for a, b, sim in pairs)
+    print(f"[diversity] iteration {iteration}: mean={mean_similarity:.2f}  pairs: {pair_str}")
+
+
 async def _run_one_design(report: str, criteria: str, input_metadata: str, config: PipelineConfig, data_dir: str,
                           feedback_section: str, artifacts_dir: str, label: str,
                           max_compile_attempts: int = 3) -> dict:
     """Run one full design attempt (orchestrate → workers → compile/execute loop → requirements).
 
-    Returns a candidate dict: {script, exec_pass, req_pass, artifacts, artifacts_dir, feedback, label}.
-    `feedback` is empty on full pass, else a description of what failed (for the redesign history).
+    Returns a candidate dict: {script, exec_pass, req_pass, artifacts, artifacts_dir, feedback, label,
+    analysis}. `feedback` is empty on full pass, else a description of what failed (for the redesign
+    history). `analysis` is the orchestrator's raw <analysis> text ("" if never produced).
     """
     def log(msg):
         print(f"  [{label}] {msg}")
@@ -605,7 +643,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     )
     orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
                                            model=config.orchestrator_model, cache_prompt=True)
-    analysis = extract_xml(orchestrator_response, "analysis")
+    analysis = extract_xml(orchestrator_response, "analysis").strip()
     tasks = parse_tasks(extract_xml(orchestrator_response, "tasks"))
     log(f"Architecture: {len(tasks)} functions")
 
@@ -638,7 +676,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
         log(f"[FAILED] Did not execute after {max_compile_attempts} attempts.")
         return {
             "script": compiled_script, "exec_pass": False, "req_pass": False,
-            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
             "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
         }
 
@@ -649,7 +687,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
         log("Requirements: SKIPPED (execution unverified, skipping judge call)")
         return {
             "script": compiled_script, "exec_pass": False, "req_pass": False,
-            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
             "feedback": f"Execution was not verified, so requirements cannot be checked: {exec_feedback}",
         }
 
@@ -661,7 +699,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     req_passed = req_verdict == "PASS"
     return {
         "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
-        "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+        "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
         "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
     }
 
@@ -755,6 +793,8 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
                     "feedback": f"Design raised an exception before completing: {result!r}",
                 }
             results.append(result)
+
+        _log_iteration_diversity(results, iteration + 1)
 
         # Score every design and update the global best.
         for candidate in results:
