@@ -182,25 +182,6 @@ if __name__ == '__main__':
 The <response> tags are METADATA MARKERS ONLY—do not include them in the Python code itself.
 """
 
-EXECUTION_VALIDATOR_PROMPT = """
-Check if this Python script executes without errors.
-
-Script: {content}
-Execution Result: {execution_result}
-
-PASS if: Script ran without any errors or exceptions.
-FAIL if: Any error occurred (SyntaxError, FileNotFoundError, RuntimeError, etc.).
-
-<evaluation>
-PASS or FAIL
-</evaluation>
-
-<feedback>
-If PASS: "Script executed successfully."
-If FAIL: "[Exact error message and which part of the code needs to be fixed]"
-</feedback>
-"""
-
 REQUIREMENTS_VALIDATOR_PROMPT = """
 Check if this successfully-executed script produces the required output.
 
@@ -479,46 +460,26 @@ async def compile_script(orchestrator_results: dict, config: PipelineConfig, err
     return compiled_script
 
 
-async def validate_execution(compiled_script: str, config: PipelineConfig, data_dir: str = None,
-                             artifacts_dir: str = None) -> tuple[str, str, str, list[dict]]:
-    """Check if script executes. Returns (PASS/FAIL, feedback, execution_output, artifacts)."""
-    execution_result = "(Docker unavailable)"
-    exec_output = ""
-    artifacts = []
+def validate_execution(compiled_script: str, config: PipelineConfig, data_dir: str = None,
+                       artifacts_dir: str = None) -> tuple[str, str, str, list[dict]]:
+    """Check if script executes. Grounded directly in the Docker exit code - no LLM judgment.
 
-    if data_dir:
-        exec_success, exec_output, artifacts = execute_script_in_docker(
-            compiled_script, data_dir, config.docker_image, artifacts_dir=artifacts_dir)
-        if exec_success is None:
-            execution_result = f"Docker unavailable: {exec_output}"
-        elif exec_success:
-            # Keep the TAIL: final printed output (incl. data-gap suggestions) matters most
-            execution_result = f"Script executed successfully.\n\nOutput:\n{exec_output[-2000:]}"
-        else:
-            # Keep the TAIL: Python puts the actual exception last, after the traceback frames
-            execution_result = f"Script execution failed.\n\nError:\n{exec_output[-2000:]}"
+    Returns (PASS/FAIL/SKIPPED, feedback, execution_output, artifacts). SKIPPED means execution
+    was never actually attempted (no data_dir, or Docker unavailable): this must never be reported
+    as PASS, since nothing was verified to run.
+    """
+    if not data_dir:
+        return "SKIPPED", "No data directory provided - execution was not verified.", "", []
 
-    validator_input = EXECUTION_VALIDATOR_PROMPT.format(
-        content=compiled_script,
-        execution_result=execution_result
-    )
+    exec_success, exec_output, artifacts = execute_script_in_docker(
+        compiled_script, data_dir, config.docker_image, artifacts_dir=artifacts_dir)
 
-    validator_response = await llm_call(validator_input, system_prompt=EVALUATOR_SYSTEM,
-                                       model=config.executor_evaluator_model, cache_prompt=True)
-    evaluation = extract_xml(validator_response, "evaluation").strip()
-    feedback = extract_xml(validator_response, "feedback").strip()
-
-    if not evaluation:
-        print(f"DEBUG: Execution validator response (first 800 chars):\n{validator_response[:800]}")
-        # Fallback: look for bare PASS/FAIL if tags are missing
-        if re.search(r'\bFAIL\b', validator_response):
-            evaluation = "FAIL"
-        elif re.search(r'\bPASS\b', validator_response):
-            evaluation = "PASS"
-        if not feedback:
-            feedback = validator_response.strip()
-
-    return evaluation, feedback, exec_output, artifacts
+    if exec_success is None:
+        return "SKIPPED", f"Docker unavailable - execution was not verified: {exec_output}", exec_output, artifacts
+    if exec_success:
+        return "PASS", "Script executed successfully.", exec_output, artifacts
+    # Keep the TAIL: Python puts the actual exception last, after the traceback frames
+    return "FAIL", f"Script execution failed:\n{exec_output[-2000:]}", exec_output, artifacts
 
 
 def _format_artifacts(artifacts: list[dict]) -> str:
@@ -627,17 +588,20 @@ async def _run_one_design(report: str, input_metadata: str, config: PipelineConf
     )
     orchestrator_results = {"analysis": analysis, "worker_results": worker_results}
 
-    # INNER LOOP: Compiler + Execution Validator
+    # INNER LOOP: Compiler + (grounded) Execution check
     compiled_script, exec_output, artifacts = None, "", []
     execution_passed = False
+    exec_verdict = "FAIL"
     compile_error = ""
     for attempt in range(max_compile_attempts):
         log(f"Compile attempt {attempt + 1}/{max_compile_attempts}...")
         compiled_script = await compile_script(orchestrator_results, config, error_feedback=compile_error)
-        exec_verdict, exec_feedback, exec_output, artifacts = await validate_execution(
+        exec_verdict, exec_feedback, exec_output, artifacts = validate_execution(
             compiled_script, config, data_dir, artifacts_dir=artifacts_dir)
         log(f"Execution: {exec_verdict}")
-        if exec_verdict == "PASS":
+        # SKIPPED (no Docker) is terminal too - there's no error to fix, so retrying compiles
+        # the same script again for nothing. It is NOT the same as a verified PASS though.
+        if exec_verdict in ("PASS", "SKIPPED"):
             execution_passed = True
             break
         if attempt < max_compile_attempts - 1:
@@ -651,13 +615,14 @@ async def _run_one_design(report: str, input_metadata: str, config: PipelineConf
             "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
         }
 
-    # REQUIREMENTS VALIDATOR: only runs if execution passed
+    # REQUIREMENTS VALIDATOR: only runs if execution passed or was skipped (unverified).
+    # A SKIPPED run produced no artifacts, so this will honestly fail the PNG-count check.
     req_verdict, req_feedback = await validate_requirements(
         compiled_script, report, exec_output, config, artifacts=artifacts)
     log(f"Requirements: {req_verdict}")
     req_passed = req_verdict == "PASS"
     return {
-        "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
+        "script": compiled_script, "exec_pass": exec_verdict == "PASS", "req_pass": req_passed,
         "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
         "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
     }
