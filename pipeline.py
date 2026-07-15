@@ -301,11 +301,18 @@ def format_prompt(template: str, **kwargs) -> str:
         raise ValueError(f"Missing required prompt variable: {e}") from e
 
 
+# Matches a bare `&` that isn't the start of a real XML entity/char reference - the model
+# frequently writes plain prose (e.g. "cards & checklists") into <description> text, which is
+# invalid XML and otherwise breaks the whole <tasks> block for a single stray character.
+_BARE_AMPERSAND = re.compile(r'&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)')
+
+
 def parse_tasks(tasks_xml: str) -> list[dict]:
     """Parse XML tasks into a list of task dictionaries."""
     tasks = []
+    sanitized = _BARE_AMPERSAND.sub('&amp;', tasks_xml)
     try:
-        root = ET.fromstring(f"<root>{tasks_xml}</root>")
+        root = ET.fromstring(f"<root>{sanitized}</root>")
         task_elems = root.findall("task")
 
         for task_elem in task_elems:
@@ -318,18 +325,16 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
     except ET.ParseError as e:
         print(f"Warning: Failed to parse tasks XML: {e}")
         print(f"DEBUG: Raw tasks_xml (first 500 chars):\n{tasks_xml[:500]}")
-        # Fallback: try to extract tasks manually using regex
-        import re
+        # Fallback: try to extract tasks manually using regex (covers structural breakage that
+        # ampersand-escaping alone can't fix, e.g. a stray literal '<' in a description).
         task_pattern = r'<task>(.*?)</task>'
         for match in re.finditer(task_pattern, tasks_xml, re.DOTALL):
             task_content = match.group(1)
             task = {}
-            func_match = re.search(r'<function>(.*?)</function>', task_content)
-            desc_match = re.search(r'<description>(.*?)</description>', task_content)
-            if func_match:
-                task['function'] = func_match.group(1).strip()
-            if desc_match:
-                task['description'] = desc_match.group(1).strip()
+            for field in ("function", "description", "input", "output"):
+                field_match = re.search(f'<{field}>(.*?)</{field}>', task_content, re.DOTALL)
+                if field_match:
+                    task[field] = field_match.group(1).strip()
             if task:
                 tasks.append(task)
     return tasks
