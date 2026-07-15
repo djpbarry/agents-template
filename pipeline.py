@@ -680,10 +680,16 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
     # actually makes the pipeline domain-agnostic: without it, the orchestrator and requirements
     # validator prompts would have to hardcode the shape of "success" (metric counts, plot counts,
     # file types) for one specific kind of report, pre-deciding every axis a design could vary on.
-    criteria_input = format_prompt(CRITERIA_PROMPT, report=report, input_data=input_metadata)
-    criteria_response = await llm_call(criteria_input, system_prompt=CRITERIA_SYSTEM,
-                                       model=config.requirements_evaluator_model, cache_prompt=True)
-    criteria = extract_xml(criteria_response, "criteria").strip() or criteria_response.strip()
+    # If extraction itself fails (e.g. a transient rate-limit error), fall back to the raw report
+    # instead of leaving every design this run pointed at an empty rubric.
+    try:
+        criteria_input = format_prompt(CRITERIA_PROMPT, report=report, input_data=input_metadata)
+        criteria_response = await llm_call(criteria_input, system_prompt=CRITERIA_SYSTEM,
+                                           model=config.requirements_evaluator_model, cache_prompt=True)
+        criteria = extract_xml(criteria_response, "criteria").strip() or criteria_response.strip()
+    except Exception as e:
+        print(f"WARNING: Criteria extraction failed ({e!r}); falling back to the raw report as the criteria.")
+        criteria = report
     print(f"\nSuccess criteria extracted from report:\n{criteria}\n")
 
     # Base dir under which each design gets its OWN iter_N/design_M subdir, so the files
