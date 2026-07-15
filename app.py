@@ -11,7 +11,7 @@ from pathlib import Path
 from pipeline import generate_and_optimize
 
 
-async def main(report_path: str, data_dir: str, output_dir: str, max_iterations: int):
+async def main(report_path: str, data_dir: str, output_dir: str, max_iterations: int, designs_per_iteration: int):
     """Run the pipeline on a task report with domain-specific configuration."""
     with open(report_path, 'r', encoding='utf-8') as f:
         report_content = f.read()
@@ -22,6 +22,7 @@ async def main(report_path: str, data_dir: str, output_dir: str, max_iterations:
         data_dir=data_dir,
         max_iterations=max_iterations,
         output_dir=output_dir,
+        designs_per_iteration=designs_per_iteration,
     )
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -63,8 +64,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=5,
-        help="Maximum refinement iterations"
+        default=2,
+        help="Maximum redesign iterations (default: 2). Total full design attempts run is "
+             "max-iterations x designs-per-iteration, each with its own orchestrator + compiler "
+             "calls (Opus for both, in the trello config) - this multiplies fast."
+    )
+    parser.add_argument(
+        "--designs-per-iteration",
+        type=int,
+        default=3,
+        help="Independent parallel design attempts fanned out per iteration (default: 3); "
+             "the best-scoring one is kept. Set to 1 for the classic single-design-per-iteration behavior."
     )
 
     args = parser.parse_args()
@@ -85,4 +95,4 @@ if __name__ == "__main__":
     report_path = args.report or report_default
     data_dir = args.data_dir or data_dir_default
 
-    asyncio.run(main(report_path, data_dir, args.output_dir, args.max_iterations))
+    asyncio.run(main(report_path, data_dir, args.output_dir, args.max_iterations, args.designs_per_iteration))
