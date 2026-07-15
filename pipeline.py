@@ -637,14 +637,25 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
             "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
         }
 
-    # REQUIREMENTS VALIDATOR: only runs if execution passed or was skipped (unverified).
-    # A SKIPPED run produced no artifacts, so any criteria requiring saved files will honestly fail.
+    if exec_verdict == "SKIPPED":
+        # Execution was never verified (no data_dir / Docker unavailable), so there are no real
+        # artifacts to grade - a requirements call here is a guaranteed-FAIL judge call paid for
+        # nothing. Short-circuit instead of spending one per design per iteration.
+        log("Requirements: SKIPPED (execution unverified, skipping judge call)")
+        return {
+            "script": compiled_script, "exec_pass": False, "req_pass": False,
+            "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
+            "feedback": f"Execution was not verified, so requirements cannot be checked: {exec_feedback}",
+        }
+
+    # REQUIREMENTS VALIDATOR: only reached on a verified execution PASS (FAIL returned above,
+    # SKIPPED short-circuited above).
     req_verdict, req_feedback = await validate_requirements(
         compiled_script, report, criteria, exec_output, config, artifacts=artifacts)
     log(f"Requirements: {req_verdict}")
     req_passed = req_verdict == "PASS"
     return {
-        "script": compiled_script, "exec_pass": exec_verdict == "PASS", "req_pass": req_passed,
+        "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
         "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label,
         "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
     }
