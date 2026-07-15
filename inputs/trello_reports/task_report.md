@@ -7,6 +7,7 @@ Analyze a Trello board JSON export to explore and answer key questions about tea
 ## Input
 
 Trello board exported as JSON file containing: cards, lists, members, labels, checklists, custom fields, and activity history.
+Of particular interest are the custom fields, particularly "Lab (Name)", "Source" and "Lead".
 
 ## Guiding Questions for Analysis
 
@@ -29,7 +30,7 @@ Analyse the Trello board JSON export and suggest **5-7 key metrics** that help a
 - More insightful than just raw counts (consider timing, distribution, and patterns)
 
 Examples might include: cards per member, time-to-archive, time-in-list, update frequency, bottleneck lists, velocity trends, etc.
-Pay particular attention here to the custom fields and labels used in the Trello board, as these may provide additional insights.
+Pay particular attention here to the custom fields and labels used in the Trello board – any insights derived from these are of particular interest.
 Consider other metrics that might typically be included in an analysis of Trello board activity, or project management in general.
 
 ### 2. Create Visualizations (3+ PNG files)
