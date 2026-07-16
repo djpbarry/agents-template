@@ -12,12 +12,10 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
-from pathlib import Path
-
 from anthropic import AsyncAnthropic
-from dotenv import load_dotenv
-
 from config import PipelineConfig
+from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv(override=True)
 async_client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -212,28 +210,32 @@ Success Criteria:
 Script: {content}
 Execution Output: {execution_result}
 
-PASS if ALL are true:
-1. Every item in the Success Criteria is met, judged by the ACTUAL output above (console output and
-   the "Files actually produced on disk" listing) — NOT by what the code merely claims to do. A file
-   the criteria requires that is 0-byte or missing FAILS, even if the code calls a save function on it.
-2. The script does not add outputs, metrics, or files beyond what the criteria calls for.
-3. Code is clean (one-line docstrings, no bloat).
+Judge EACH bullet in the Success Criteria above, in the same order, against the ACTUAL output above
+(console output and the "Files actually produced on disk" listing) — NOT against what the code merely
+claims to do. A file the criteria requires that is 0-byte or missing is NOT met, even if the code
+calls a save function on it.
 
-FAIL if any criterion is not met.
+Emit exactly one <criterion met="true"/> or <criterion met="false"/> tag per bullet, in the same
+order as the Success Criteria, and nothing else inside this block:
 
-<evaluation>
-PASS or FAIL
-</evaluation>
+<criteria_result>
+<criterion met="true"/>
+<criterion met="false"/>
+</criteria_result>
 
 <feedback>
-If PASS: "All requirements met. Data gaps for future analysis: [list 2-3 things that would help, if applicable]"
-If FAIL: "[Specific requirement not met and what needs to be added]"
+For every criterion above marked met="false", explain specifically what's missing and what needs to
+change. Also note, without changing the verdicts above, if the script adds outputs/metrics/files
+beyond what the criteria calls for, or if the code is not clean (one-line docstrings, no bloat).
+If every criterion is met="true" and there's nothing else to flag: "All requirements met. Data gaps
+for future analysis: [list 2-3 things that would help, if applicable]"
 </feedback>
 """
 
 
 # Core LLM interface
-async def llm_call(prompt: str, system_prompt: str = None, model: str = None, cache_prompt: bool = False, max_tokens: int = 8192) -> str:
+async def llm_call(prompt: str, system_prompt: str = None, model: str = None, cache_prompt: bool = False,
+                   max_tokens: int = 8192) -> str:
     """
     Calls the model with the given prompt and returns the response.
 
@@ -346,15 +348,15 @@ def parse_tasks(tasks_xml: str) -> list[dict]:
 # Sandbox flags for running untrusted, LLM-generated code. Docker here provides both
 # dependency pinning AND isolation. Tune these if a host/platform rejects a flag.
 DOCKER_SANDBOX_FLAGS = [
-    "--network", "none",              # no network access
-    "--memory", "1g",                 # cap RAM
-    "--memory-swap", "1g",            # == memory, so swap is disabled
-    "--cpus", "2",                    # cap CPU
-    "--pids-limit", "256",            # limit processes (fork-bomb guard)
-    "--read-only",                    # read-only root filesystem
-    "--cap-drop", "ALL",              # drop all Linux capabilities
+    "--network", "none",  # no network access
+    "--memory", "1g",  # cap RAM
+    "--memory-swap", "1g",  # == memory, so swap is disabled
+    "--cpus", "2",  # cap CPU
+    "--pids-limit", "256",  # limit processes (fork-bomb guard)
+    "--read-only",  # read-only root filesystem
+    "--cap-drop", "ALL",  # drop all Linux capabilities
     "--security-opt", "no-new-privileges",  # block privilege escalation
-    "--user", "1000:1000",            # run as non-root
+    "--user", "1000:1000",  # run as non-root
     # Writable scratch for the non-root user under a read-only root (matplotlib/font cache, etc.)
     "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
 ]
@@ -536,9 +538,18 @@ def _format_artifacts(artifacts: list[dict]) -> str:
     return "\n".join(lines)
 
 
+_CRITERION_PATTERN = re.compile(r'<criterion\s+met="(true|false)"\s*/?>', re.IGNORECASE)
+
+
 async def validate_requirements(compiled_script: str, report: str, criteria: str, exec_output: str,
-                                config: PipelineConfig, artifacts: list[dict] = None) -> tuple[str, str]:
-    """Check if script output meets the success criteria. Returns (PASS/FAIL, feedback)."""
+                                config: PipelineConfig, artifacts: list[dict] = None) -> tuple[float, bool, str]:
+    """Check the script's actual output against each bullet of the extracted success criteria.
+
+    Returns (req_score, req_pass, feedback): req_score is met/total across every <criterion> tag the
+    validator emitted (0.0 if it emitted none - treated as a full miss, not a free pass); req_pass is
+    True only when every criterion was met. The graded score, not just the boolean, is what lets a
+    mutated design's fitness be compared even when neither pass outright.
+    """
     artifacts_listing = _format_artifacts(artifacts or [])
     validator_input = REQUIREMENTS_VALIDATOR_PROMPT.format(
         report=report,
@@ -549,21 +560,22 @@ async def validate_requirements(compiled_script: str, report: str, criteria: str
     )
 
     validator_response = await llm_call(validator_input, system_prompt=EVALUATOR_SYSTEM,
-                                       model=config.requirements_evaluator_model, cache_prompt=True)
-    evaluation = extract_xml(validator_response, "evaluation").strip()
+                                        model=config.requirements_evaluator_model, cache_prompt=True)
+    verdicts = _CRITERION_PATTERN.findall(validator_response)
     feedback = extract_xml(validator_response, "feedback").strip()
 
-    if not evaluation:
-        print(f"DEBUG: Requirements validator response (first 800 chars):\n{validator_response[:800]}")
-        # Fallback: look for bare PASS/FAIL if tags are missing
-        if re.search(r'\bFAIL\b', validator_response):
-            evaluation = "FAIL"
-        elif re.search(r'\bPASS\b', validator_response):
-            evaluation = "PASS"
+    if not verdicts:
+        print(
+            f"DEBUG: Requirements validator emitted no <criterion> tags (first 800 chars):\n{validator_response[:800]}")
         if not feedback:
             feedback = validator_response.strip()
 
-    return evaluation, feedback
+    total = len(verdicts)
+    met = sum(1 for v in verdicts if v.lower() == "true")
+    req_score = met / total if total else 0.0
+    req_pass = total > 0 and met == total
+
+    return req_score, req_pass, feedback
 
 
 async def _call_worker(task_info: dict, task_index: int, report: str, input_metadata: str,
@@ -592,18 +604,16 @@ async def _call_worker(task_info: dict, task_index: int, report: str, input_meta
 
 
 def _candidate_score(candidate: dict) -> tuple:
-    """Rank candidates lexicographically: requirements-pass, then execution-pass, then valid-PNG count.
+    """Rank candidates lexicographically: execution-pass first, then the graded requirements score.
 
-    Tuples compare left-to-right and bools sort as 0/1, so a requirements-passing script always
-    wins; among equal pass/fail status, the one that produced more non-zero-byte PNGs ranks higher -
-    capped at 3, since beyond that more plots isn't "better" (over-plotting is commonly penalized in
-    report guidance) and the count would otherwise reward designs that generate extra visualizations
-    just to win the tie-break. This cap is a fixed tie-break ceiling, independent of whatever PNG
-    count (if any) the report's extracted success criteria actually calls for.
+    exec_pass is the high-order bit because it's the hard, Docker-grounded oracle signal - nothing
+    the noisy LLM requirements judgment says should ever outrank it. req_score (met/total against the
+    extracted rubric, from validate_requirements) only ever separates designs that already agree on
+    exec_pass, and unlike a boolean req_pass it gives a real gradient both below and approaching the
+    pass line - which is what lets mutation-from-seed (see generate_and_optimize) tell a design that
+    got closer from one that didn't.
     """
-    valid_pngs = sum(1 for a in candidate["artifacts"]
-                     if a["name"].lower().endswith(".png") and a["size"] > 0)
-    return (candidate["req_pass"], candidate["exec_pass"], min(valid_pngs, 3))
+    return (candidate["exec_pass"], candidate.get("req_score", 0.0))
 
 
 def pick_best_seed(archive: list[dict]) -> dict | None:
@@ -676,7 +686,10 @@ def _journal_entry(candidate: dict, iteration: int) -> str:
 
     exec_verdict = candidate.get("exec_verdict", "ERROR")
     req_pass = candidate.get("req_pass", False)
-    req_status = "PASS" if req_pass else ("FAIL" if exec_verdict == "PASS" else "n/a")
+    if exec_verdict == "PASS":
+        req_status = f"{'PASS' if req_pass else 'FAIL'} (score={candidate.get('req_score', 0.0):.2f})"
+    else:
+        req_status = "n/a"
     valid_artifacts = sum(1 for a in candidate.get("artifacts") or [] if a.get("size", 0) > 0)
 
     entry = (
@@ -704,6 +717,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     analysis}. `feedback` is empty on full pass, else a description of what failed (for the redesign
     history). `analysis` is the orchestrator's raw <analysis> text ("" if never produced).
     """
+
     def log(msg):
         print(f"  [{label}] {msg}")
 
@@ -760,7 +774,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     if not execution_passed:
         log(f"[FAILED] Did not execute after {max_compile_attempts} attempts.")
         return {
-            "script": compiled_script, "exec_pass": False, "req_pass": False,
+            "script": compiled_script, "exec_pass": False, "req_pass": False, "req_score": 0.0,
             "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
             "exec_verdict": "FAIL",
             "feedback": f"Execution failed after {max_compile_attempts} compile attempts: {exec_feedback}",
@@ -772,7 +786,7 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
         # nothing. Short-circuit instead of spending one per design per iteration.
         log("Requirements: SKIPPED (execution unverified, skipping judge call)")
         return {
-            "script": compiled_script, "exec_pass": False, "req_pass": False,
+            "script": compiled_script, "exec_pass": False, "req_pass": False, "req_score": 0.0,
             "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
             "exec_verdict": "SKIPPED",
             "feedback": f"Execution was not verified, so requirements cannot be checked: {exec_feedback}",
@@ -780,12 +794,11 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
 
     # REQUIREMENTS VALIDATOR: only reached on a verified execution PASS (FAIL returned above,
     # SKIPPED short-circuited above).
-    req_verdict, req_feedback = await validate_requirements(
+    req_score, req_passed, req_feedback = await validate_requirements(
         compiled_script, report, criteria, exec_output, config, artifacts=artifacts)
-    log(f"Requirements: {req_verdict}")
-    req_passed = req_verdict == "PASS"
+    log(f"Requirements: {'PASS' if req_passed else 'FAIL'} (score={req_score:.2f})")
     return {
-        "script": compiled_script, "exec_pass": True, "req_pass": req_passed,
+        "script": compiled_script, "exec_pass": True, "req_pass": req_passed, "req_score": req_score,
         "artifacts": artifacts, "artifacts_dir": artifacts_dir, "label": label, "analysis": analysis,
         "exec_verdict": "PASS",
         "feedback": "" if req_passed else f"Executed cleanly but requirements not met: {req_feedback}",
@@ -915,7 +928,7 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
             if isinstance(result, BaseException):
                 print(f"  [{label}] [ERROR] {result!r}")
                 result = {
-                    "script": None, "exec_pass": False, "req_pass": False,
+                    "script": None, "exec_pass": False, "req_pass": False, "req_score": 0.0,
                     "artifacts": [], "artifacts_dir": None, "label": label, "exec_verdict": "ERROR",
                     "feedback": f"Design raised an exception before completing: {result!r}",
                 }
@@ -940,7 +953,8 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
 
         iter_best = max(results, key=_candidate_score)
         print(f"\nIteration {iteration + 1} best design: {iter_best['label']} "
-              f"(exec={iter_best['exec_pass']}, req={iter_best['req_pass']})")
+              f"(exec={iter_best['exec_pass']}, req={iter_best['req_pass']}, "
+              f"req_score={iter_best.get('req_score', 0.0):.2f})")
 
         if iter_best["req_pass"]:
             print(f"\n{'=' * 80}")
@@ -953,10 +967,9 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
     print("[WARNING] Max iterations reached. Returning best effort.")
     if best_candidate:
         status = "executed + requirements" if best_candidate["req_pass"] else (
-            "executed cleanly" if best_candidate["exec_pass"] else "did not execute")
+            f"executed cleanly, req_score={best_candidate.get('req_score', 0.0):.2f}"
+            if best_candidate["exec_pass"] else "did not execute")
         print(f"Best candidate: iteration {best_candidate['iteration']}, design {best_candidate['label']} ({status}).")
         print_artifacts(best_candidate)
     print(f"{'=' * 80}\n")
     return best_candidate["script"] if best_candidate else None
-
-
