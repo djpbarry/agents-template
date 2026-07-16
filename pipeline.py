@@ -94,7 +94,7 @@ Success Criteria (the finished script must satisfy every item below - no more, n
 {feedback}
 
 Approach for this design: {stance}
-
+{seed_section}
 STEP 1: ANALYZE THE DATA
 Examine the available fields and structures.
 
@@ -170,7 +170,7 @@ Functions:
 {functions}
 
 Libraries: {library_notes}
-{error_feedback}
+{seed_section}{error_feedback}
 RULES:
 1. Write complete Python code (imports → functions → main() call)
 2. One-line docstrings only
@@ -430,8 +430,11 @@ def execute_script_in_docker(script: str, data_dir: str, docker_image: str, time
 
 
 # Core async functions for the compilation pipeline
-async def compile_script(orchestrator_results: dict, config: PipelineConfig, error_feedback: str = "") -> str:
-    """Compile worker functions into a single executable script, optionally fixing a prior execution error."""
+async def compile_script(orchestrator_results: dict, config: PipelineConfig, error_feedback: str = "",
+                         seed_script: str = None) -> str:
+    """Compile worker functions into a single executable script, optionally fixing a prior execution
+    error and/or improving a seed_script (a prior working script this design is mutating) instead of
+    assembling from scratch."""
     analysis = orchestrator_results["analysis"]
 
     functions_text = "\n\n".join([
@@ -449,11 +452,23 @@ async def compile_script(orchestrator_results: dict, config: PipelineConfig, err
             f"{error_feedback}\n"
         )
 
+    seed_section = ""
+    if seed_script:
+        seed_section = (
+            "\nSEED SCRIPT (the working script this design is improving upon):\n"
+            f"{seed_script}\n\n"
+            "Integrate the functions above into an IMPROVED version of this seed script - carry over "
+            "parts of the seed that still apply, replace or extend the parts the new/changed functions "
+            "address, and remove anything superseded. Do not discard working seed logic that the "
+            "architecture and functions above don't touch.\n"
+        )
+
     compiler_input = COMPILER_PROMPT.format(
         analysis=analysis,
         functions=functions_text,
         library_notes=config.available_libraries,
         error_feedback=error_section,
+        seed_section=seed_section,
     )
 
     compiled_response = await llm_call(compiler_input, system_prompt=COMPILER_SYSTEM, model=config.compiler_model,
@@ -675,8 +690,15 @@ def _journal_entry(candidate: dict, iteration: int) -> str:
 
 async def _run_one_design(report: str, criteria: str, input_metadata: str, config: PipelineConfig, data_dir: str,
                           feedback_section: str, stance: str, artifacts_dir: str, label: str,
-                          max_compile_attempts: int = 3) -> dict:
+                          max_compile_attempts: int = 3, seed_script: str = None,
+                          seed_label: str = None) -> dict:
     """Run one full design attempt (orchestrate → workers → compile/execute loop → requirements).
+
+    If seed_script is given (a prior candidate's working script, e.g. from the archive), the
+    orchestrator and compiler are instructed to IMPROVE it rather than design from scratch - a
+    mutation, not a diff/patch. Safe because the Docker oracle in the compile/execute loop below
+    still catches any regression the mutation introduces, exactly as it would for a from-scratch
+    design. seed_label is purely for logging (which archived node this design mutated).
 
     Returns a candidate dict: {script, exec_pass, req_pass, artifacts, artifacts_dir, feedback, label,
     analysis}. `feedback` is empty on full pass, else a description of what failed (for the redesign
@@ -685,10 +707,23 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     def log(msg):
         print(f"  [{label}] {msg}")
 
+    log(f"Seed: mutating {seed_label}" if seed_script else "Seed: none (from scratch)")
+
+    orchestrator_seed_section = ""
+    if seed_script:
+        orchestrator_seed_section = (
+            "\nSEED SCRIPT (a working script from a prior design that already executed successfully):\n"
+            f"{seed_script}\n\n"
+            "Your job is to IMPROVE this script so it better satisfies the Success Criteria and the "
+            "journal above - not to design a new architecture from scratch. Keep what already works; "
+            "change only what's needed to fix known issues or satisfy criteria the seed doesn't yet "
+            "meet.\n"
+        )
+
     # ORCHESTRATOR: design the architecture
     orchestrator_input = format_prompt(
         ORCHESTRATOR_PROMPT, report=report, criteria=criteria, input_data=input_metadata,
-        feedback=feedback_section, stance=stance,
+        feedback=feedback_section, stance=stance, seed_section=orchestrator_seed_section,
     )
     orchestrator_response = await llm_call(orchestrator_input, system_prompt=ORCHESTRATOR_SYSTEM,
                                            model=config.orchestrator_model, cache_prompt=True)
@@ -709,7 +744,8 @@ async def _run_one_design(report: str, criteria: str, input_metadata: str, confi
     compile_error = ""
     for attempt in range(max_compile_attempts):
         log(f"Compile attempt {attempt + 1}/{max_compile_attempts}...")
-        compiled_script = await compile_script(orchestrator_results, config, error_feedback=compile_error)
+        compiled_script = await compile_script(orchestrator_results, config, error_feedback=compile_error,
+                                               seed_script=seed_script)
         exec_verdict, exec_feedback, exec_output, artifacts = validate_execution(
             compiled_script, config, data_dir, artifacts_dir=artifacts_dir)
         log(f"Execution: {exec_verdict}")
@@ -846,9 +882,29 @@ async def generate_and_optimize(report: str, config: PipelineConfig, data_dir: s
         ]
         labels = [f"I{iteration + 1}.D{m + 1}" for m in range(designs_per_iteration)]
         stances = [config.design_stances[m % len(config.design_stances)] for m in range(designs_per_iteration)]
+
+        # Seed some designs from the archive once it's non-empty, mutating a prior working script
+        # instead of designing from scratch - orthogonal to the stance assignment above. Design 0
+        # mutates the best archived node, design 1 mutates a different node (for diversity), any
+        # remaining designs stay from-scratch (exploration). Iteration 1's archive is empty, so
+        # every design that iteration is from-scratch. A mutated design that regresses simply loses
+        # on _candidate_score and never overwrites a better archived node - the Docker oracle in the
+        # compile/execute loop still catches any regression the mutation introduces.
+        seed_scripts = [None] * designs_per_iteration
+        seed_labels = [None] * designs_per_iteration
+        if archive:
+            best_seed = pick_best_seed(archive)
+            if designs_per_iteration >= 1:
+                seed_scripts[0], seed_labels[0] = best_seed["script"], best_seed["label"]
+            if designs_per_iteration >= 2:
+                other_seed = pick_other_seed(archive, exclude=best_seed)
+                if other_seed:
+                    seed_scripts[1], seed_labels[1] = other_seed["script"], other_seed["label"]
+
         raw_results = await asyncio.gather(*[
             _run_one_design(report, criteria, input_metadata, config, data_dir, feedback_section,
-                            stances[m], design_dirs[m], label=labels[m])
+                            stances[m], design_dirs[m], label=labels[m],
+                            seed_script=seed_scripts[m], seed_label=seed_labels[m])
             for m in range(designs_per_iteration)
         ], return_exceptions=True)
 
