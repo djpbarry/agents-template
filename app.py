@@ -45,7 +45,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         default="bioimage",
-        choices=["bioimage", "trello"],
+        choices=["bioimage", "trello", "cbias"],
         help="Domain configuration to use (default: bioimage)"
     )
     parser.add_argument(
@@ -88,6 +88,10 @@ if __name__ == "__main__":
         from trello_config import CONFIG
         report_default = "./inputs/trello_reports/task_report.md"
         data_dir_default = "./inputs/trello_data"
+    elif args.config == "cbias":
+        from cbias_config import CONFIG
+        report_default = "./inputs/cbias_report/task_report.md"
+        data_dir_default = "./inputs/cbias_data"
     else:
         raise ValueError(f"Unknown config: {args.config}")
 
