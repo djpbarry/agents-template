@@ -13,13 +13,17 @@ Of particular interest are the custom fields, particularly "Lab (Name)", "Source
 
 Your analysis should help answer these exploratory questions:
 
-1. **Workflow Bottlenecks**: Where do cards get stuck? Which lists do cards spend the most time in? Are there significant delays between creation and completion?
+1. **Workflow Bottlenecks**: Where do cards get stuck? Which lists do cards spend the most time in? Are there significant delays between creation and completion? Do cards from certain labs go stale more often than others?
 
 2. **Team Workload Distribution**: How is work distributed across team members? Are some members overloaded while others have capacity? Which members handle which types of work?
 
 3. **Velocity & Timing Patterns**: How long does it typically take for cards to move through the workflow? Is the process getting faster or slower? Are there patterns in how often cards are updated?
 
 4. **Process Health**: How many cards are in progress vs. completed? Are there inactive cards that should be archived? How is the board being used—is activity even or bursty?
+
+5. **Client Relationship Management**: Do specific labs or users have a preference for specific team members? Do people in the same lab open projects with multiple team members?
+
+6. **Lab workload distribution**: Which labs do the team spend most time working with? How has this evolved over time? Are projects with certain labs more productive than others?
 
 ## Analysis Requirements
 
@@ -28,17 +32,22 @@ Analyse the Trello board JSON export and suggest **5-7 key metrics** that help a
 - Computable from the available data
 - Relevant to at least one of the 4 guiding questions
 - More insightful than just raw counts (consider timing, distribution, and patterns)
+- Examine carefully the plot examples in the MatplotLib and Seaborn galleries and consider whether these might inform your choice of metrics:
+  - https://github.com/matplotlib/matplotlib/tree/main/galleries
+  - https://github.com/mwaskom/seaborn/tree/master/examples
+- Pay particular attention here to the custom fields and labels used in the Trello board – any insights derived from these are of particular interest.
+- Consider other metrics that might typically be included in an analysis of Trello board activity, or project management in general.
 
-Examples might include: cards per member, time-to-archive, time-in-list, update frequency, bottleneck lists, velocity trends, etc.
-Pay particular attention here to the custom fields and labels used in the Trello board – any insights derived from these are of particular interest.
-Consider other metrics that might typically be included in an analysis of Trello board activity, or project management in general.
-
-### 2. Create Visualizations (3+ PNG files)
-Create **at least 3 visualizations** that illustrate the metrics chosen in section 1. Pick visualizations that help answer the guiding questions:
+### 2. Create Visualizations (PNG files)
+Create **at least five visualizations** that illustrate the metrics chosen in section 1. Pick visualizations that help answer the guiding questions:
 - Time-series or trend plots if timing data is available
 - Heatmaps to show patterns across dimensions
-- scatter plots to show data distribution and variability
-- Avoid bar charts and pie charts
+- Scatter plots to show data distribution and variability
+- Cumulative time-series to display how work or issues have accumulated or distributions have shifted over time
+- Prioritise plots that show all data (e.g. scatter) over those that summarise (bar, pie)
+- Again, examine carefully the plot examples in the MatplotLib and Seaborn galleries and consider whether any of these visualisations (or variations/combinations thereof) might be useful in this context:
+  - https://github.com/matplotlib/matplotlib/tree/main/galleries
+  - https://github.com/mwaskom/seaborn/tree/master/examples
 
 ### 3. Identify Data Gaps
 
